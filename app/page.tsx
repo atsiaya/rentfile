@@ -135,7 +135,7 @@ export default function LandingPage() {
       <section className="relative z-10 border-t border-line bg-bg-alt/60 py-20">
         <div className="mx-auto max-w-6xl px-6 sm:px-8">
           <h2 className="font-display text-3xl italic text-fg">
-            How a payment becomes a record
+            How a payment becomes a ledger
           </h2>
           <div className="mt-12 grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
             {flow.map((step) => (
