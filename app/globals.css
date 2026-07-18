@@ -13,18 +13,18 @@ html {
 }
 
 body {
-  background-color: #0b1220;
-  color: #edeff3;
+  background-color: #ffffff;
+  color: #13161d;
   font-family: var(--font-body);
 }
 
 ::selection {
-  background: #d9a44a;
-  color: #0b1220;
+  background: #c08a2e;
+  color: #ffffff;
 }
 
 :focus-visible {
-  outline: 2px solid #d9a44a;
+  outline: 2px solid #c08a2e;
   outline-offset: 3px;
 }
 
