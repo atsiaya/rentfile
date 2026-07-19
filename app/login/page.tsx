@@ -1,4 +1,3 @@
-
 "use client";
 
 import { Suspense, useState } from "react";
@@ -27,7 +26,7 @@ function LoginForm() {
       const cred = await signInWithEmailAndPassword(auth, email, password);
       const snap = await getDoc(doc(db, "users", cred.user.uid));
       const storedRole = snap.exists() ? snap.data().role : role;
-      router.push(storedRole === "landlord" ? "/dashboard" : "/tenant");
+      router.push(storedRole === "tenant" ? "/units" : "/dashboard");
     } catch (err) {
       setError(
         err instanceof Error
@@ -160,4 +159,3 @@ export default function LoginPage() {
     </Suspense>
   );
 }
-
