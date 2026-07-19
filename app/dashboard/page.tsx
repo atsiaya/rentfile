@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { onAuthStateChanged, signOut, type User } from "firebase/auth";
+import { signOut } from "firebase/auth";
 import {
   Banknote,
   Bell,
@@ -16,33 +16,38 @@ import {
   MessageSquare,
   Plus,
   Receipt,
+  ShieldAlert,
   Users,
   Wrench,
   Zap,
 } from "lucide-react";
 import { auth } from "@/lib/firebase";
+import { accessKeysFor, useUserRecord } from "@/lib/useUserRecord";
 
-const navSections = [
+const navSections: {
+  heading?: string;
+  items: { key: string; label: string; icon: typeof Home; href: string }[];
+}[] = [
   {
     items: [
-      { label: "Home", icon: Home, href: "/dashboard" },
-      { label: "Tenants", icon: Users, href: "/dashboard/tenants" },
+      { key: "home", label: "Home", icon: Home, href: "/dashboard" },
+      { key: "tenants", label: "Tenants", icon: Users, href: "/dashboard/tenants" },
     ],
   },
   {
     heading: "Rent",
     items: [
-      { label: "Collect Rent", icon: Banknote, href: "/dashboard/collect" },
-      { label: "Autopay", icon: Zap, href: "/dashboard/autopay" },
-      { label: "Ledger", icon: Receipt, href: "/dashboard/ledger" },
-      { label: "Reminders", icon: Bell, href: "/dashboard/reminders" },
+      { key: "collectRent", label: "Collect Rent", icon: Banknote, href: "/dashboard/collect" },
+      { key: "autopay", label: "Autopay", icon: Zap, href: "/dashboard/autopay" },
+      { key: "ledger", label: "Ledger", icon: Receipt, href: "/dashboard/ledger" },
+      { key: "reminders", label: "Reminders", icon: Bell, href: "/dashboard/reminders" },
     ],
   },
   {
     items: [
-      { label: "Maintenance", icon: Wrench, href: "/dashboard/maintenance" },
-      { label: "Messages", icon: MessageSquare, href: "/dashboard/messages" },
-      { label: "Documents", icon: FileText, href: "/dashboard/documents" },
+      { key: "maintenance", label: "Maintenance", icon: Wrench, href: "/dashboard/maintenance" },
+      { key: "messages", label: "Messages", icon: MessageSquare, href: "/dashboard/messages" },
+      { key: "documents", label: "Documents", icon: FileText, href: "/dashboard/documents" },
     ],
   },
 ];
@@ -54,7 +59,7 @@ const stats = [
   { label: "Open maintenance", value: "2" },
 ];
 
-function firstName(name: string | null) {
+function firstName(name: string) {
   if (!name) return "there";
   return name.trim().split(" ")[0];
 }
@@ -68,34 +73,42 @@ function greeting() {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
-  const [checking, setChecking] = useState(true);
-  const [hasProperty] = useState(false);
+  const { user, profile, loading } = useUserRecord();
+  const [hasProperty] = [false];
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      if (!u) {
-        router.replace("/login?role=landlord");
-        return;
-      }
-      setUser(u);
-      setChecking(false);
-    });
-    return () => unsub();
-  }, [router]);
+    if (loading) return;
+    if (!user || !profile) {
+      router.replace("/login?role=landlord");
+      return;
+    }
+    // Tenants have their own view — units and payments, not the management dashboard.
+    if (profile.role === "tenant") {
+      router.replace("/units");
+    }
+  }, [loading, user, profile, router]);
 
   async function handleSignOut() {
     await signOut(auth);
     router.replace("/");
   }
 
-  if (checking) {
+  if (loading || !profile || profile.role === "tenant") {
     return (
       <div className="flex min-h-screen items-center justify-center bg-bg-alt">
         <Loader2 className="h-6 w-6 animate-spin text-accent" />
       </div>
     );
   }
+
+  const allowedKeys = accessKeysFor(profile);
+  const canManageProperties = profile.role === "landlord";
+  const visibleSections = navSections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => allowedKeys.includes(item.key)),
+    }))
+    .filter((section) => section.items.length > 0);
 
   return (
     <div className="min-h-screen bg-bg-alt pb-24 lg:pb-0">
@@ -120,7 +133,7 @@ export default function DashboardPage() {
           </button>
 
           <nav className="mt-4 flex-1 space-y-5 overflow-y-auto">
-            {navSections.map((section, i) => (
+            {visibleSections.map((section, i) => (
               <div key={i}>
                 {section.heading && (
                   <p className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted">
@@ -129,10 +142,10 @@ export default function DashboardPage() {
                 )}
                 <div className="space-y-0.5">
                   {section.items.map((item) => {
-                    const active = item.label === "Home";
+                    const active = item.key === "home";
                     return (
                       <Link
-                        key={item.label}
+                        key={item.key}
                         href={item.href}
                         className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
                           active
@@ -174,23 +187,42 @@ export default function DashboardPage() {
               })}
             </div>
             <div className="flex items-center gap-2">
-              <Link
-                href="/dashboard/properties/new"
-                className="inline-flex items-center gap-1.5 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:brightness-105"
-              >
-                <Plus className="h-4 w-4" />
-                <span className="hidden sm:inline">Add Property</span>
-              </Link>
+              {canManageProperties && (
+                <Link
+                  href="/dashboard/properties/new"
+                  className="inline-flex items-center gap-1.5 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:brightness-105"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span className="hidden sm:inline">Add Property</span>
+                </Link>
+              )}
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-accent-soft text-sm font-semibold text-accent-ink">
-                {(user?.displayName ?? user?.email ?? "U").charAt(0).toUpperCase()}
+                {profile.fullName.charAt(0).toUpperCase()}
               </div>
             </div>
           </div>
 
+          {/* Limited access notice for agents */}
+          {profile.role === "agent" && (
+            <div className="flex items-start gap-3 rounded-2xl border border-accent/30 bg-accent-soft px-4 py-3.5">
+              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-accent-ink" strokeWidth={1.75} />
+              <p className="text-sm text-accent-ink">
+                You're signed in as an agent with limited access
+                {allowedKeys.length > 0 ? " to: " : "."}
+                {allowedKeys
+                  .filter((k) => k !== "home")
+                  .map((k) => navSections.flatMap((s) => s.items).find((i) => i.key === k)?.label)
+                  .filter(Boolean)
+                  .join(", ")}
+                . Contact the landlord to change what you can see.
+              </p>
+            </div>
+          )}
+
           {/* Greeting */}
           <div className="rounded-3xl border border-line bg-bg p-6 shadow-sm sm:p-8">
             <h1 className="font-display text-2xl font-bold tracking-tight text-fg sm:text-3xl">
-              {greeting()}, {firstName(user?.displayName ?? null)}.
+              {greeting()}, {firstName(profile.fullName)}.
             </h1>
             <p className="mt-1.5 text-sm text-muted">
               Here's where things stand across your properties.
@@ -223,19 +255,22 @@ export default function DashboardPage() {
                 <Building2 className="h-6 w-6 text-accent-ink" strokeWidth={1.75} />
               </span>
               <h2 className="mt-5 font-display text-xl font-bold text-fg">
-                Add your first property
+                {canManageProperties ? "Add your first property" : "No property assigned yet"}
               </h2>
               <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted">
-                Once a property is set up, its ledger, tenants, and reminders
-                will show up right here.
+                {canManageProperties
+                  ? "Once a property is set up, its ledger, tenants, and reminders will show up right here."
+                  : "Ask the landlord to assign you to a property so it shows up here."}
               </p>
-              <Link
-                href="/dashboard/properties/new"
-                className="mt-6 inline-flex items-center gap-2 rounded-xl bg-accent px-6 py-3 text-sm font-semibold text-white transition hover:brightness-105"
-              >
-                <Plus className="h-4 w-4" />
-                Add Property
-              </Link>
+              {canManageProperties && (
+                <Link
+                  href="/dashboard/properties/new"
+                  className="mt-6 inline-flex items-center gap-2 rounded-xl bg-accent px-6 py-3 text-sm font-semibold text-white transition hover:brightness-105"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Property
+                </Link>
+              )}
             </div>
           )}
         </main>
@@ -248,14 +283,18 @@ export default function DashboardPage() {
             <Home className="h-5 w-5" strokeWidth={1.75} />
             <span className="text-[11px] font-medium">Home</span>
           </Link>
-          <Link href="/dashboard/ledger" className="flex flex-col items-center gap-1 rounded-xl px-4 py-1.5 text-muted">
-            <Receipt className="h-5 w-5" strokeWidth={1.75} />
-            <span className="text-[11px] font-medium">Ledger</span>
-          </Link>
-          <Link href="/dashboard/tenants" className="flex flex-col items-center gap-1 rounded-xl px-4 py-1.5 text-muted">
-            <Users className="h-5 w-5" strokeWidth={1.75} />
-            <span className="text-[11px] font-medium">Tenants</span>
-          </Link>
+          {allowedKeys.includes("ledger") && (
+            <Link href="/dashboard/ledger" className="flex flex-col items-center gap-1 rounded-xl px-4 py-1.5 text-muted">
+              <Receipt className="h-5 w-5" strokeWidth={1.75} />
+              <span className="text-[11px] font-medium">Ledger</span>
+            </Link>
+          )}
+          {allowedKeys.includes("tenants") && (
+            <Link href="/dashboard/tenants" className="flex flex-col items-center gap-1 rounded-xl px-4 py-1.5 text-muted">
+              <Users className="h-5 w-5" strokeWidth={1.75} />
+              <span className="text-[11px] font-medium">Tenants</span>
+            </Link>
+          )}
           <button onClick={handleSignOut} className="flex flex-col items-center gap-1 rounded-xl px-4 py-1.5 text-muted">
             <LogOut className="h-5 w-5" strokeWidth={1.75} />
             <span className="text-[11px] font-medium">Sign out</span>
