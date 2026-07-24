@@ -44,13 +44,19 @@ function NoPropertySelected() {
 /** Invite-tenant modal — its own component so form state resets cleanly each time it opens. */
 function InviteTenantModal({
   propertyId,
+  unitLabels,
+  occupiedUnits,
   onClose,
 }: {
   propertyId: string;
+  unitLabels: string[];
+  occupiedUnits: string[];
   onClose: () => void;
 }) {
   const [name, setName] = useState("");
-  const [unit, setUnit] = useState("");
+  const [unit, setUnit] = useState(
+    unitLabels.find((u) => !occupiedUnits.includes(u)) ?? ""
+  );
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [rent, setRent] = useState("");
@@ -121,7 +127,24 @@ function InviteTenantModal({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="mb-2 block text-sm font-semibold text-fg">Unit</label>
-              <input required value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="e.g. A1" className={fieldClass} />
+              {unitLabels.length === 0 ? (
+                <p className="rounded-xl border border-dashed border-line bg-bg-alt px-4 py-2.5 text-xs text-muted">
+                  No units on this property yet — add some from Add Property first.
+                </p>
+              ) : (
+                <select
+                  required
+                  value={unit}
+                  onChange={(e) => setUnit(e.target.value)}
+                  className={fieldClass}
+                >
+                  {unitLabels.map((u) => (
+                    <option key={u} value={u} disabled={occupiedUnits.includes(u)}>
+                      {u}{occupiedUnits.includes(u) ? " (occupied)" : ""}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
             <div>
               <label className="mb-2 block text-sm font-semibold text-fg">Monthly rent (KES)</label>
@@ -150,7 +173,7 @@ function InviteTenantModal({
 
         <button
           type="submit"
-          disabled={saving}
+          disabled={saving || unitLabels.length === 0}
           className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-sm font-semibold text-white transition hover:brightness-105 disabled:opacity-60"
         >
           {saving && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -285,7 +308,12 @@ export default function TenantsPage() {
       </div>
 
       {showInvite && (
-        <InviteTenantModal propertyId={selected.id} onClose={() => setShowInvite(false)} />
+        <InviteTenantModal
+          propertyId={selected.id}
+          unitLabels={selected.unitLabels}
+          occupiedUnits={tenants.map((t) => t.unit)}
+          onClose={() => setShowInvite(false)}
+        />
       )}
     </div>
   );
