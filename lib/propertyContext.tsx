@@ -27,6 +27,7 @@ export type Property = {
 type PropertyContextValue = {
   properties: Property[];
   loading: boolean;
+  error: string | null;
   selected: Property | null;
   selectedId: string | null;
   setSelectedId: (id: string) => void;
@@ -35,28 +36,50 @@ type PropertyContextValue = {
 const PropertyContext = createContext<PropertyContextValue | null>(null);
 
 /**
- * Loads every property owned by the signed-in landlord (live, via onSnapshot)
- * and tracks which one is currently selected across the dashboard.
- * Agents see the same list for now — scoping properties to an agent's
- * specific assignment is a later step once that data model exists.
+ * Loads properties from Firestore, scoped by role — this is the part that
+ * was silently wrong before: a landlord's properties are matched by
+ * `ownerId`, but an agent never owns a property, so the same `ownerId`
+ * query always came back empty for them regardless of what a landlord had
+ * actually granted. Agents are matched by `agentIds` array-contains instead.
  */
 export function PropertyProvider({ children }: { children: ReactNode }) {
-  const { user } = useUserRecord();
+  const { user, profile } = useUserRecord();
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!user) {
+    if (!user || !profile) {
       setProperties([]);
       setLoading(false);
       return;
     }
-    const q = query(
-      collection(db, "properties"),
-      where("ownerId", "==", user.uid),
-      orderBy("createdAt", "desc")
-    );
+
+    // Tenants don't browse a property list here at all (they land on /units).
+    if (profile.role === "tenant") {
+      setProperties([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    const q =
+      profile.role === "landlord"
+        ? query(
+            collection(db, "properties"),
+            where("ownerId", "==", user.uid),
+            orderBy("createdAt", "desc")
+          )
+        : // agent — only properties a landlord has explicitly granted them
+          query(
+            collection(db, "properties"),
+            where("agentIds", "array-contains", user.uid),
+            orderBy("createdAt", "desc")
+          );
+
     const unsub = onSnapshot(
       q,
       (snap) => {
@@ -68,22 +91,26 @@ export function PropertyProvider({ children }: { children: ReactNode }) {
         }));
         setProperties(rows);
         setLoading(false);
-        // Keep a selection valid: default to the first property, and if the
-        // previously selected one was deleted, fall back rather than pointing nowhere.
         setSelectedId((prev) =>
           prev && rows.some((r) => r.id === prev) ? prev : rows[0]?.id ?? null
         );
       },
-      () => setLoading(false)
+      (err) => {
+        // Surface it instead of failing silently into a permanently-empty list —
+        // a missing composite index throws exactly this kind of error.
+        console.error("properties listener failed:", err);
+        setError(err.message);
+        setLoading(false);
+      }
     );
     return () => unsub();
-  }, [user]);
+  }, [user, profile]);
 
   const selected = properties.find((p) => p.id === selectedId) ?? null;
 
   return (
     <PropertyContext.Provider
-      value={{ properties, loading, selected, selectedId, setSelectedId }}
+      value={{ properties, loading, error, selected, selectedId, setSelectedId }}
     >
       {children}
     </PropertyContext.Provider>

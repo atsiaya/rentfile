@@ -24,7 +24,7 @@ function DashboardChrome({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const { user, profile, loading } = useUserRecord();
-  const { properties, selected, selectedId, setSelectedId } = useProperty();
+  const { properties, selected, selectedId, setSelectedId, error: propertyError } = useProperty();
 
   const [propertyMenuOpen, setPropertyMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -99,7 +99,7 @@ function DashboardChrome({ children }: { children: React.ReactNode }) {
           <div className="absolute left-0 right-0 top-full z-50 mt-2 max-h-72 overflow-y-auto rounded-2xl border border-line bg-bg p-1.5 shadow-lg">
             {properties.length === 0 && (
               <p className="px-3 py-2.5 text-sm text-muted">
-                No properties yet.
+                {propertyError ? `Couldn't load properties: ${propertyError}` : "No properties yet."}
               </p>
             )}
             {properties.map((p) => (
@@ -257,11 +257,11 @@ function DashboardChrome({ children }: { children: React.ReactNode }) {
             <div className="flex items-center gap-2">
               {canManageProperties && (
                 <Link
-                  href="/dashboard/collect"
+                  href="/dashboard/properties/new"
                   className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3.5 py-2 text-sm font-semibold text-white transition hover:brightness-105 sm:px-4"
                 >
                   <Plus className="h-4 w-4" />
-                  <span className="hidden sm:inline">Add payment</span>
+                  <span className="hidden sm:inline">Add Property</span>
                 </Link>
               )}
               {ProfileMenu}

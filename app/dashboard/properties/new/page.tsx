@@ -38,6 +38,7 @@ export default function AddPropertyPage() {
         area,
         units: Number(units) || 0,
         ownerId: user.uid,
+        agentIds: [],
         createdAt: serverTimestamp(),
       });
       // Show a confirmation instead of redirecting immediately — the
