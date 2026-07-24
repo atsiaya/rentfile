@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Building2, CheckCircle2, Loader2, MapPin, Hash } from "lucide-react";
+import { Building2, CheckCircle2, Loader2, MapPin, Plus, X } from "lucide-react";
 import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useUserRecord } from "@/lib/useUserRecord";
@@ -14,12 +14,12 @@ export default function AddPropertyPage() {
 
   const [name, setName] = useState("");
   const [area, setArea] = useState("");
-  const [units, setUnits] = useState("");
+  const [unitInput, setUnitInput] = useState("");
+  const [unitLabels, setUnitLabels] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState<{ name: string; area: string; units: string } | null>(null);
+  const [saved, setSaved] = useState<{ name: string; area: string; unitLabels: string[] } | null>(null);
 
-  // Only the landlord who owns the workspace can add properties.
   useEffect(() => {
     if (loading) return;
     if (!user || !profile || profile.role !== "landlord") {
@@ -27,32 +27,53 @@ export default function AddPropertyPage() {
     }
   }, [loading, user, profile, router]);
 
+  function addUnit() {
+    const label = unitInput.trim();
+    if (!label) return;
+    if (unitLabels.some((u) => u.toLowerCase() === label.toLowerCase())) {
+      setUnitInput("");
+      return;
+    }
+    setUnitLabels((u) => [...u, label]);
+    setUnitInput("");
+  }
+
+  function removeUnit(label: string) {
+    setUnitLabels((u) => u.filter((x) => x !== label));
+  }
+
+  function handleUnitKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      addUnit();
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!user) return;
+    if (unitLabels.length === 0) {
+      setError("Add at least one unit before saving.");
+      return;
+    }
     setError(null);
     setSaving(true);
     try {
       await addDoc(collection(db, "properties"), {
         name,
         area,
-        units: Number(units) || 0,
+        units: unitLabels.length,
+        unitLabels,
         ownerId: user.uid,
         agentIds: [],
         createdAt: serverTimestamp(),
       });
-      // Show a confirmation instead of redirecting immediately — the
-      // dashboard's property list is fed by a live Firestore listener
-      // (lib/propertyContext.tsx), so by the time someone taps through
-      // it's already there without needing a manual refresh.
-      setSaved({ name, area, units });
+      setSaved({ name, area, unitLabels });
       setName("");
       setArea("");
-      setUnits("");
+      setUnitLabels([]);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Couldn't save that property. Try again."
-      );
+      setError(err instanceof Error ? err.message : "Couldn't save that property. Try again.");
     } finally {
       setSaving(false);
     }
@@ -78,8 +99,8 @@ export default function AddPropertyPage() {
           </h1>
           <p className="mt-2 text-sm text-muted">
             <span className="font-medium text-fg">{saved.name}</span> is now
-            on your dashboard with {saved.units || 0} unit
-            {Number(saved.units) === 1 ? "" : "s"} in {saved.area}.
+            on your dashboard with {saved.unitLabels.length} unit
+            {saved.unitLabels.length === 1 ? "" : "s"} in {saved.area}.
           </p>
 
           <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
@@ -116,8 +137,8 @@ export default function AddPropertyPage() {
           Add a property
         </h1>
         <p className="mt-1.5 text-sm text-muted">
-          Once it's saved, you can invite tenants and start filing rent
-          against it.
+          Name each unit here — this is the list tenants get assigned from
+          later, so it's worth getting the labels right now.
         </p>
 
         <div className="mt-6">
@@ -154,19 +175,51 @@ export default function AddPropertyPage() {
 
         <div className="mt-6">
           <label className="mb-2 block text-sm font-semibold text-fg">
-            Number of units
+            Units
           </label>
-          <div className="relative flex items-center">
-            <Hash className="pointer-events-none absolute left-4 h-[18px] w-[18px] text-muted" strokeWidth={1.75} />
+          <div className="flex gap-2">
             <input
-              required
-              inputMode="numeric"
-              value={units}
-              onChange={(e) => setUnits(e.target.value)}
-              placeholder="e.g. 10"
-              className="w-full rounded-2xl border border-line bg-bg-alt py-3.5 pl-12 pr-4 text-sm text-fg placeholder:text-muted/70 outline-none transition focus:border-accent focus:ring-4 focus:ring-accent-soft"
+              value={unitInput}
+              onChange={(e) => setUnitInput(e.target.value)}
+              onKeyDown={handleUnitKeyDown}
+              placeholder="e.g. A1 — press Enter to add"
+              className="flex-1 rounded-2xl border border-line bg-bg-alt px-4 py-3.5 text-sm text-fg placeholder:text-muted/70 outline-none transition focus:border-accent focus:ring-4 focus:ring-accent-soft"
             />
+            <button
+              type="button"
+              onClick={addUnit}
+              className="flex h-[50px] w-[50px] shrink-0 items-center justify-center rounded-2xl border border-line text-fg transition hover:border-accent hover:text-accent-ink"
+              aria-label="Add unit"
+            >
+              <Plus className="h-5 w-5" />
+            </button>
           </div>
+
+          {unitLabels.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {unitLabels.map((u) => (
+                <span
+                  key={u}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-accent-soft py-1.5 pl-3 pr-2 text-sm font-medium text-accent-ink"
+                >
+                  {u}
+                  <button
+                    type="button"
+                    onClick={() => removeUnit(u)}
+                    aria-label={`Remove ${u}`}
+                    className="flex h-4 w-4 items-center justify-center rounded-full hover:bg-accent/20"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <p className="mt-2 text-xs text-muted">
+            {unitLabels.length === 0
+              ? "No units added yet."
+              : `${unitLabels.length} unit${unitLabels.length === 1 ? "" : "s"} added.`}
+          </p>
         </div>
 
         {error && (
