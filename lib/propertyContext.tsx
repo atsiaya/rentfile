@@ -22,6 +22,7 @@ export type Property = {
   name: string;
   area: string;
   units: number;
+  unitLabels: string[];
 };
 
 type PropertyContextValue = {
@@ -88,6 +89,7 @@ export function PropertyProvider({ children }: { children: ReactNode }) {
           name: d.data().name ?? "Untitled property",
           area: d.data().area ?? "",
           units: d.data().units ?? 0,
+          unitLabels: Array.isArray(d.data().unitLabels) ? d.data().unitLabels : [],
         }));
         setProperties(rows);
         setLoading(false);
