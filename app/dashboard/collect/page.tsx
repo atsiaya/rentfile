@@ -17,19 +17,31 @@ import {
   CheckCircle2,
   ClipboardPaste,
   Clock,
+  Phone,
   User,
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { useProperty } from "@/lib/propertyContext";
 
-type Tenant = { id: string; name: string; unit: string; rent: number };
+type Tenant = {
+  id: string;
+  name: string;
+  unit: string;
+  rent: number;
+  phone: string;
+  email: string;
+};
 
 type Extracted = {
   name: string;
+  phone: string;
+  email: string;
   amount: string;
   date: string;
   time: string;
 };
+
+type MatchMethod = "phone" | "email" | "name" | null;
 
 const methods = ["M-Pesa", "Bank transfer", "Cash"] as const;
 
@@ -37,10 +49,17 @@ function currentMonthKey(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+/** Normalizes any Kenyan phone format down to its last 9 digits, so
+ * "0722 111 222", "+254722111222", and "254722111222" all compare equal. */
+function normalizePhone(raw: string): string {
+  const digits = raw.replace(/\D/g, "");
+  return digits.slice(-9);
+}
+
 /**
- * Pulls sender name, amount, date, and time out of a pasted payment
- * confirmation message (M-Pesa's format is the primary target, but the
- * patterns are loose enough to catch similar bank/SMS confirmations).
+ * Pulls sender name, phone, email, amount, date, and time out of a pasted
+ * payment confirmation message (M-Pesa's format is the primary target, but
+ * the patterns are loose enough to catch similar bank/SMS confirmations).
  * Anything it can't find is left blank for the landlord to fill in by hand.
  */
 function extractFromMessage(text: string): Extracted {
@@ -48,11 +67,15 @@ function extractFromMessage(text: string): Extracted {
   const nameMatch = text.match(
     /(?:received from|from)\s+([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,3})\s+(?:\d{9,}|on\b)/i
   );
+  const phoneMatch = text.match(/(?:\+?254|0)7\d{8}/);
+  const emailMatch = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
   const dateMatch = text.match(/on\s+(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
   const timeMatch = text.match(/at\s+(\d{1,2}:\d{2}\s?[APap]\.?[Mm]\.?)/i);
 
   return {
     name: nameMatch?.[1]?.trim() ?? "",
+    phone: phoneMatch?.[0] ?? "",
+    email: emailMatch?.[0] ?? "",
     amount: amountMatch?.[1]?.replace(/,/g, "") ?? "",
     date: dateMatch?.[1] ?? "",
     time: timeMatch?.[1]?.replace(/\./g, "").toUpperCase() ?? "",
@@ -73,6 +96,7 @@ export default function CollectRentPage() {
   const { selected } = useProperty();
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [tenantId, setTenantId] = useState("");
+  const [matchMethod, setMatchMethod] = useState<MatchMethod>(null);
 
   const [message, setMessage] = useState("");
   const [extracted, setExtracted] = useState<Extracted | null>(null);
@@ -82,6 +106,8 @@ export default function CollectRentPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Live-fetched from Firestore — this is the same tenants collection the
+  // Tenants page writes to, scoped to whichever property is selected.
   useEffect(() => {
     if (!selected) {
       setTenants([]);
@@ -94,6 +120,8 @@ export default function CollectRentPage() {
         name: d.data().name ?? "",
         unit: d.data().unit ?? "",
         rent: Number(d.data().rent) || 0,
+        phone: d.data().phone ?? "",
+        email: d.data().email ?? "",
       }));
       setTenants(rows);
       setTenantId((prev) => prev || rows[0]?.id || "");
@@ -136,17 +164,33 @@ export default function CollectRentPage() {
     if (result.amount) setAmount(result.amount);
     if (/m-?pesa/i.test(message)) setMethod("M-Pesa");
 
-    // Try to match the extracted sender to a tenant already on this property.
-    if (result.name) {
+    // Match priority: phone (most reliable identifier in an SMS) → email → name.
+    let matched: Tenant | undefined;
+    let via: MatchMethod = null;
+
+    if (result.phone) {
+      const needle = normalizePhone(result.phone);
+      matched = tenants.find((t) => t.phone && normalizePhone(t.phone) === needle);
+      if (matched) via = "phone";
+    }
+    if (!matched && result.email) {
+      const needle = result.email.toLowerCase();
+      matched = tenants.find((t) => t.email && t.email.toLowerCase() === needle);
+      if (matched) via = "email";
+    }
+    if (!matched && result.name) {
       const needle = result.name.toLowerCase();
-      const match = tenants.find(
+      matched = tenants.find(
         (t) =>
           t.name.toLowerCase() === needle ||
           needle.includes(t.name.toLowerCase()) ||
           t.name.toLowerCase().includes(needle)
       );
-      if (match) setTenantId(match.id);
+      if (matched) via = "name";
     }
+
+    setMatchMethod(via);
+    if (matched) setTenantId(matched.id);
   }
 
   const tenant = tenants.find((t) => t.id === tenantId);
@@ -167,7 +211,10 @@ export default function CollectRentPage() {
         method,
         status: "Paid",
         monthKey: parsedDate ? currentMonthKey(parsedDate) : currentMonthKey(),
+        matchMethod,
         extractedName: extracted?.name ?? null,
+        extractedPhone: extracted?.phone ?? null,
+        extractedEmail: extracted?.email ?? null,
         paymentDate: extracted?.date ?? null,
         paymentTime: extracted?.time ?? null,
         rawMessage: message || null,
@@ -176,6 +223,7 @@ export default function CollectRentPage() {
       setRecorded(`${tenant.unit} — ${tenant.name} — KES ${amount || "0"} via ${method}`);
       setMessage("");
       setExtracted(null);
+      setMatchMethod(null);
       setAmount("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't record that payment.");
@@ -190,7 +238,7 @@ export default function CollectRentPage() {
         <div className="rounded-3xl border border-line bg-bg p-6 shadow-sm sm:p-8">
           <h1 className="font-display text-2xl font-bold tracking-tight text-fg">Collect Rent</h1>
           <p className="mt-1 text-sm text-muted">
-            Paste a payment confirmation for {selected.name} and we'll pull out the details.
+            Paste a payment confirmation for {selected.name} and we'll match it to a tenant.
           </p>
 
           {/* Paste + extract */}
@@ -218,25 +266,36 @@ export default function CollectRentPage() {
 
           {/* What we found */}
           {extracted && (
-            <div className="mt-5 grid grid-cols-1 gap-2.5 rounded-2xl border border-line bg-bg-alt p-4 sm:grid-cols-3">
-              <div className="flex items-center gap-2">
-                <User className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
-                <span className="truncate text-sm text-fg">
-                  {extracted.name || "Name not found"}
-                </span>
+            <div className="mt-5 space-y-3">
+              <div className="grid grid-cols-1 gap-2.5 rounded-2xl border border-line bg-bg-alt p-4 sm:grid-cols-2">
+                <div className="flex items-center gap-2">
+                  <User className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
+                  <span className="truncate text-sm text-fg">{extracted.name || "Name not found"}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Phone className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
+                  <span className="truncate text-sm text-fg">{extracted.phone || "Phone not found"}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Calendar className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
+                  <span className="truncate text-sm text-fg">{extracted.date || "Date not found"}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Clock className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
+                  <span className="truncate text-sm text-fg">{extracted.time || "Time not found"}</span>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Calendar className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
-                <span className="truncate text-sm text-fg">
-                  {extracted.date || "Date not found"}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Clock className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
-                <span className="truncate text-sm text-fg">
-                  {extracted.time || "Time not found"}
-                </span>
-              </div>
+
+              {matchMethod ? (
+                <div className="flex items-center gap-2 rounded-2xl bg-good-soft px-4 py-2.5 text-sm text-good">
+                  <CheckCircle2 className="h-4 w-4 shrink-0" strokeWidth={1.75} />
+                  Matched to {tenant?.name} by {matchMethod === "phone" ? "phone number" : matchMethod === "email" ? "email" : "name"}.
+                </div>
+              ) : (
+                <div className="rounded-2xl bg-accent-soft px-4 py-2.5 text-sm text-accent-ink">
+                  Couldn't match this to a tenant on record — pick one manually below.
+                </div>
+              )}
             </div>
           )}
 
@@ -246,7 +305,10 @@ export default function CollectRentPage() {
               <label className="mb-2 block text-sm font-semibold text-fg">Tenant</label>
               <select
                 value={tenantId}
-                onChange={(e) => setTenantId(e.target.value)}
+                onChange={(e) => {
+                  setTenantId(e.target.value);
+                  setMatchMethod(null);
+                }}
                 className="w-full rounded-2xl border border-line bg-bg-alt px-4 py-3.5 text-sm text-fg outline-none transition focus:border-accent focus:ring-4 focus:ring-accent-soft"
               >
                 {tenants.map((t) => (
@@ -255,11 +317,6 @@ export default function CollectRentPage() {
                   </option>
                 ))}
               </select>
-              {extracted?.name && !tenants.some((t) => t.id === tenantId && t.name.toLowerCase() === extracted.name.toLowerCase()) && (
-                <p className="mt-1.5 text-xs text-muted">
-                  Couldn't confidently match "{extracted.name}" to a tenant — double-check the selection above.
-                </p>
-              )}
             </div>
 
             <div>
