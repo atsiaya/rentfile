@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Building2, Loader2, MapPin, Hash } from "lucide-react";
+import { Building2, CheckCircle2, Loader2, MapPin, Hash } from "lucide-react";
 import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useUserRecord } from "@/lib/useUserRecord";
@@ -16,6 +17,7 @@ export default function AddPropertyPage() {
   const [units, setUnits] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<{ name: string; area: string; units: string } | null>(null);
 
   // Only the landlord who owns the workspace can add properties.
   useEffect(() => {
@@ -38,7 +40,14 @@ export default function AddPropertyPage() {
         ownerId: user.uid,
         createdAt: serverTimestamp(),
       });
-      router.push("/dashboard");
+      // Show a confirmation instead of redirecting immediately — the
+      // dashboard's property list is fed by a live Firestore listener
+      // (lib/propertyContext.tsx), so by the time someone taps through
+      // it's already there without needing a manual refresh.
+      setSaved({ name, area, units });
+      setName("");
+      setArea("");
+      setUnits("");
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Couldn't save that property. Try again."
@@ -52,6 +61,41 @@ export default function AddPropertyPage() {
     return (
       <div className="flex min-h-[50vh] items-center justify-center">
         <Loader2 className="h-6 w-6 animate-spin text-accent" />
+      </div>
+    );
+  }
+
+  if (saved) {
+    return (
+      <div className="space-y-4">
+        <div className="mx-auto max-w-lg rounded-3xl border border-line bg-bg p-6 text-center shadow-sm sm:p-10">
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-good-soft">
+            <CheckCircle2 className="h-7 w-7 text-good" strokeWidth={1.75} />
+          </span>
+          <h1 className="mt-5 font-display text-2xl font-bold tracking-tight text-fg">
+            Property added
+          </h1>
+          <p className="mt-2 text-sm text-muted">
+            <span className="font-medium text-fg">{saved.name}</span> is now
+            on your dashboard with {saved.units || 0} unit
+            {Number(saved.units) === 1 ? "" : "s"} in {saved.area}.
+          </p>
+
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <Link
+              href="/dashboard"
+              className="inline-flex items-center justify-center rounded-xl bg-accent px-6 py-3 text-sm font-semibold text-white transition hover:brightness-105"
+            >
+              Go to dashboard
+            </Link>
+            <button
+              onClick={() => setSaved(null)}
+              className="inline-flex items-center justify-center rounded-xl border border-line px-6 py-3 text-sm font-semibold text-fg transition hover:border-accent hover:text-accent-ink"
+            >
+              Add another property
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
