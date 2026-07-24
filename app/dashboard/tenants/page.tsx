@@ -10,7 +10,7 @@ import {
   serverTimestamp,
   where,
 } from "firebase/firestore";
-import { Building2, Loader2, Mail, Phone, Plus, Search, X } from "lucide-react";
+import { Building2, CheckCircle2, Loader2, Mail, Phone, Plus, Search, X } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { useProperty } from "@/lib/propertyContext";
 
@@ -53,19 +53,30 @@ function InviteTenantModal({
   occupiedUnits: string[];
   onClose: () => void;
 }) {
+  const availableUnits = unitLabels.filter((u) => !occupiedUnits.includes(u));
+  const allUnitsOccupied = unitLabels.length > 0 && availableUnits.length === 0;
+
   const [name, setName] = useState("");
-  const [unit, setUnit] = useState(
-    unitLabels.find((u) => !occupiedUnits.includes(u)) ?? ""
-  );
+  const [unit, setUnit] = useState(availableUnits[0] ?? "");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [rent, setRent] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [added, setAdded] = useState<{ name: string; unit: string } | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    // Belt-and-braces: the <select> already disables occupied options, but
+    // never trust client-side selection state alone — re-check right before
+    // the write goes to Firestore.
+    if (!unit || occupiedUnits.includes(unit)) {
+      setError("That unit is already occupied — pick a different one.");
+      return;
+    }
+
     setSaving(true);
     try {
       await addDoc(collection(db, "tenants"), {
@@ -79,12 +90,38 @@ function InviteTenantModal({
         autopayEnabled: false,
         createdAt: serverTimestamp(),
       });
-      onClose();
+      setAdded({ name, unit });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't add that tenant.");
     } finally {
       setSaving(false);
     }
+  }
+
+  if (added) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+        <button aria-label="Close" onClick={onClose} className="absolute inset-0 bg-black/30" />
+        <div className="relative w-full max-w-md rounded-t-3xl border border-line bg-bg p-6 text-center shadow-xl sm:rounded-3xl sm:p-8">
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-good-soft">
+            <CheckCircle2 className="h-7 w-7 text-good" strokeWidth={1.75} />
+          </span>
+          <h2 className="mt-5 font-display text-2xl font-bold tracking-tight text-fg">
+            Tenant added successfully
+          </h2>
+          <p className="mt-2 text-sm text-muted">
+            <span className="font-medium text-fg">{added.name}</span> is now
+            on unit <span className="font-medium text-fg">{added.unit}</span>.
+          </p>
+          <button
+            onClick={onClose}
+            className="mt-7 inline-flex w-full items-center justify-center rounded-xl bg-accent px-6 py-3 text-sm font-semibold text-white transition hover:brightness-105"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -131,6 +168,10 @@ function InviteTenantModal({
                 <p className="rounded-xl border border-dashed border-line bg-bg-alt px-4 py-2.5 text-xs text-muted">
                   No units on this property yet — add some from Add Property first.
                 </p>
+              ) : allUnitsOccupied ? (
+                <p className="rounded-xl border border-dashed border-line bg-bg-alt px-4 py-2.5 text-xs text-muted">
+                  Every unit is occupied — add more units to this property first.
+                </p>
               ) : (
                 <select
                   required
@@ -138,10 +179,8 @@ function InviteTenantModal({
                   onChange={(e) => setUnit(e.target.value)}
                   className={fieldClass}
                 >
-                  {unitLabels.map((u) => (
-                    <option key={u} value={u} disabled={occupiedUnits.includes(u)}>
-                      {u}{occupiedUnits.includes(u) ? " (occupied)" : ""}
-                    </option>
+                  {availableUnits.map((u) => (
+                    <option key={u} value={u}>{u}</option>
                   ))}
                 </select>
               )}
@@ -173,7 +212,7 @@ function InviteTenantModal({
 
         <button
           type="submit"
-          disabled={saving || unitLabels.length === 0}
+          disabled={saving || unitLabels.length === 0 || allUnitsOccupied}
           className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-sm font-semibold text-white transition hover:brightness-105 disabled:opacity-60"
         >
           {saving && <Loader2 className="h-4 w-4 animate-spin" />}
