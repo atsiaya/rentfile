@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   addDoc,
   collection,
@@ -16,7 +16,10 @@ import {
   Home,
   Loader2,
   Mail,
+  MessageCircle,
+  MessageSquare,
   Phone,
+  PhoneCall,
   Plus,
   Search,
   X,
@@ -47,6 +50,74 @@ function paymentInfo(t: Tenant) {
       ? "bg-yellow-100 text-yellow-700"
       : "bg-red-50 text-red-700";
   return { balance, label, className };
+}
+
+/** Turns a tenant's phone number into a tap-to-choose Call / WhatsApp / SMS menu. */
+function ContactMenu({ phone }: { phone: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  // wa.me needs a country code with no leading zero or "+". Kenyan numbers
+  // typically arrive as 07xx/01xx locally, so normalize those to 254.
+  const digits = phone.replace(/\D/g, "");
+  const waNumber = digits.startsWith("0")
+    ? `254${digits.slice(1)}`
+    : digits.startsWith("254")
+    ? digits
+    : `254${digits}`;
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1 rounded-md hover:text-accent-ink"
+      >
+        <Phone className="h-3 w-3" strokeWidth={1.75} />
+        {phone}
+      </button>
+
+      {open && (
+        <div className="absolute left-0 top-full z-20 mt-1.5 w-40 overflow-hidden rounded-xl border border-line bg-bg shadow-lg">
+          <a
+            href={`tel:${phone}`}
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 px-3 py-2 text-xs text-fg transition hover:bg-bg-alt"
+          >
+            <PhoneCall className="h-3.5 w-3.5 text-accent-ink" strokeWidth={1.75} />
+            Call
+          </a>
+          <a
+            href={`https://wa.me/${waNumber}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 px-3 py-2 text-xs text-fg transition hover:bg-bg-alt"
+          >
+            <MessageCircle className="h-3.5 w-3.5 text-good" strokeWidth={1.75} />
+            WhatsApp
+          </a>
+          <a
+            href={`sms:${phone}`}
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 px-3 py-2 text-xs text-fg transition hover:bg-bg-alt"
+          >
+            <MessageSquare className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
+            SMS
+          </a>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function NoPropertySelected() {
@@ -388,10 +459,7 @@ export default function TenantsPage() {
                         <div>
                           <p className="text-sm font-semibold text-fg">{t.name}</p>
                           <div className="mt-0.5 flex flex-wrap items-center gap-3 text-xs text-muted">
-                            <span className="flex items-center gap-1">
-                              <Phone className="h-3 w-3" strokeWidth={1.75} />
-                              {t.phone}
-                            </span>
+                            <ContactMenu phone={t.phone} />
                             <span className="flex items-center gap-1">
                               <Mail className="h-3 w-3" strokeWidth={1.75} />
                               {t.email}
