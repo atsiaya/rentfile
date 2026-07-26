@@ -5,12 +5,22 @@ import {
   addDoc,
   collection,
   onSnapshot,
-  orderBy,
   query,
   serverTimestamp,
   where,
 } from "firebase/firestore";
-import { Building2, CheckCircle2, Loader2, Mail, Phone, Plus, Search, X } from "lucide-react";
+import {
+  AlertCircle,
+  Building2,
+  CheckCircle2,
+  Home,
+  Loader2,
+  Mail,
+  Phone,
+  Plus,
+  Search,
+  X,
+} from "lucide-react";
 import { db } from "@/lib/firebase";
 import { useProperty } from "@/lib/propertyContext";
 
@@ -20,9 +30,24 @@ type Tenant = {
   unit: string;
   phone: string;
   email: string;
-  rent: number;
+  rent: number; // rent due for the current month
+  amountPaid: number; // amount paid so far this month
   status: "Current" | "Arrears";
+  createdAt: number; // millis, for client-side sorting
 };
+
+function paymentInfo(t: Tenant) {
+  const balance = Math.max(t.rent - t.amountPaid, 0);
+  const label =
+    balance <= 0 ? "Paid" : t.amountPaid > 0 ? "Partial" : "Unpaid";
+  const className =
+    label === "Paid"
+      ? "bg-good-soft text-good"
+      : label === "Partial"
+      ? "bg-yellow-100 text-yellow-700"
+      : "bg-red-50 text-red-700";
+  return { balance, label, className };
+}
 
 function NoPropertySelected() {
   return (
@@ -61,6 +86,7 @@ function InviteTenantModal({
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [rent, setRent] = useState("");
+  const [amountPaid, setAmountPaid] = useState("0");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [added, setAdded] = useState<{ name: string; unit: string } | null>(null);
@@ -86,6 +112,7 @@ function InviteTenantModal({
         phone,
         email,
         rent: Number(rent) || 0,
+        amountPaid: Number(amountPaid) || 0,
         status: "Current",
         autopayEnabled: false,
         createdAt: serverTimestamp(),
@@ -192,6 +219,11 @@ function InviteTenantModal({
           </div>
 
           <div>
+            <label className="mb-2 block text-sm font-semibold text-fg">Amount already paid this month (KES)</label>
+            <input inputMode="numeric" value={amountPaid} onChange={(e) => setAmountPaid(e.target.value)} placeholder="0" className={fieldClass} />
+          </div>
+
+          <div>
             <label className="mb-2 block text-sm font-semibold text-fg">Phone</label>
             <div className="relative flex items-center">
               <Phone className="pointer-events-none absolute left-4 h-[18px] w-[18px] text-muted" strokeWidth={1.75} />
@@ -227,6 +259,7 @@ export default function TenantsPage() {
   const { selected } = useProperty();
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [tenantsLoading, setTenantsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showInvite, setShowInvite] = useState(false);
 
@@ -236,22 +269,55 @@ export default function TenantsPage() {
       setTenantsLoading(false);
       return;
     }
+
     setTenantsLoading(true);
-    const q = query(collection(db, "tenants"), where("propertyId", "==", selected.id), orderBy("createdAt", "desc"));
-    const unsub = onSnapshot(q, (snap) => {
-      setTenants(
-        snap.docs.map((d) => ({
-          id: d.id,
-          name: d.data().name ?? "",
-          unit: d.data().unit ?? "",
-          phone: d.data().phone ?? "",
-          email: d.data().email ?? "",
-          rent: Number(d.data().rent) || 0,
-          status: (d.data().status as Tenant["status"]) ?? "Current",
-        }))
-      );
-      setTenantsLoading(false);
-    });
+    setLoadError(null);
+
+    // NOTE: no orderBy here on purpose. where() + orderBy() on different
+    // fields needs a Firestore composite index — if that index doesn't
+    // exist, onSnapshot never fires and never errors (without an error
+    // handler), so the UI is stuck on the loading spinner forever with no
+    // tenants and no error. We sort client-side instead, and we always
+    // pass an error handler so a real failure (rules, network, etc.)
+    // surfaces instead of spinning silently.
+    const q = query(
+      collection(db, "tenants"),
+      where("propertyId", "==", selected.id)
+    );
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map((d) => {
+          const data = d.data();
+          const rent = Number(data.rent) || 0;
+          const amountPaid = Number(data.amountPaid) || 0;
+          const createdAt =
+            data.createdAt?.toMillis?.() ?? (data.createdAt ? Date.parse(data.createdAt) : 0);
+          return {
+            id: d.id,
+            name: data.name ?? "",
+            unit: data.unit ?? "",
+            phone: data.phone ?? "",
+            email: data.email ?? "",
+            rent,
+            amountPaid,
+            status:
+              (data.status as Tenant["status"]) ??
+              (amountPaid >= rent ? "Current" : "Arrears"),
+            createdAt,
+          } as Tenant;
+        });
+        rows.sort((a, b) => b.createdAt - a.createdAt);
+        setTenants(rows);
+        setTenantsLoading(false);
+      },
+      (err) => {
+        setLoadError(err.message || "Couldn't load tenants.");
+        setTenantsLoading(false);
+      }
+    );
+
     return () => unsub();
   }, [selected]);
 
@@ -297,45 +363,85 @@ export default function TenantsPage() {
             <div className="flex items-center justify-center py-10">
               <Loader2 className="h-5 w-5 animate-spin text-accent" />
             </div>
+          ) : loadError ? (
+            <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.75} />
+              <div>
+                <p className="font-semibold">Couldn't load tenants</p>
+                <p className="mt-0.5 text-red-600">{loadError}</p>
+              </div>
+            </div>
           ) : (
             <>
-              {filtered.map((t) => (
-                <div
-                  key={t.id}
-                  className="flex flex-col gap-3 rounded-2xl border border-line bg-bg-alt p-4 sm:flex-row sm:items-center sm:justify-between"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft font-mono text-xs font-semibold text-accent-ink">
-                      {t.unit}
-                    </span>
-                    <div>
-                      <p className="text-sm font-semibold text-fg">{t.name}</p>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-3 text-xs text-muted">
-                        <span className="flex items-center gap-1">
-                          <Phone className="h-3 w-3" strokeWidth={1.75} />
-                          {t.phone}
+              {filtered.map((t) => {
+                const { balance, label, className } = paymentInfo(t);
+                return (
+                  <div
+                    key={t.id}
+                    className="flex flex-col gap-4 rounded-2xl border border-line bg-bg-alt p-4"
+                  >
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex items-center gap-3">
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft font-mono text-xs font-semibold text-accent-ink">
+                          {t.unit}
                         </span>
-                        <span className="flex items-center gap-1">
-                          <Mail className="h-3 w-3" strokeWidth={1.75} />
-                          {t.email}
-                        </span>
+                        <div>
+                          <p className="text-sm font-semibold text-fg">{t.name}</p>
+                          <div className="mt-0.5 flex flex-wrap items-center gap-3 text-xs text-muted">
+                            <span className="flex items-center gap-1">
+                              <Phone className="h-3 w-3" strokeWidth={1.75} />
+                              {t.phone}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Mail className="h-3 w-3" strokeWidth={1.75} />
+                              {t.email}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <span
+                        className={`self-start rounded-full px-2.5 py-1 text-xs font-medium sm:self-auto ${className}`}
+                      >
+                        {label}
+                      </span>
+                    </div>
+
+                    {/* House / unit details */}
+                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-line bg-bg px-3 py-2 text-xs text-muted">
+                      <Home className="h-3.5 w-3.5 text-accent-ink" strokeWidth={1.75} />
+                      <span className="font-medium text-fg">{selected.name}</span>
+                      <span>·</span>
+                      <span>Unit {t.unit}</span>
+                    </div>
+
+                    {/* Rent for the month: due / paid / balance */}
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded-xl bg-bg px-2 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-muted">Rent</p>
+                        <p className="mt-0.5 font-mono text-sm font-semibold text-fg">
+                          {t.rent.toLocaleString()}
+                        </p>
+                      </div>
+                      <div className="rounded-xl bg-bg px-2 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-muted">Paid</p>
+                        <p className="mt-0.5 font-mono text-sm font-semibold text-good">
+                          {t.amountPaid.toLocaleString()}
+                        </p>
+                      </div>
+                      <div className="rounded-xl bg-bg px-2 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-muted">Unpaid</p>
+                        <p
+                          className={`mt-0.5 font-mono text-sm font-semibold ${
+                            balance > 0 ? "text-red-600" : "text-good"
+                          }`}
+                        >
+                          {balance.toLocaleString()}
+                        </p>
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 self-start sm:self-auto">
-                    <span className="rounded-full bg-bg px-2.5 py-1 font-mono text-xs font-medium text-muted">
-                      KES {t.rent.toLocaleString()}/mo
-                    </span>
-                    <span
-                      className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-                        t.status === "Current" ? "bg-good-soft text-good" : "bg-accent-soft text-accent-ink"
-                      }`}
-                    >
-                      {t.status}
-                    </span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
               {filtered.length === 0 && (
                 <p className="rounded-2xl border border-dashed border-line p-6 text-center text-sm text-muted">
                   {tenants.length === 0 ? "No tenants added yet." : `No tenants match "${search}".`}
