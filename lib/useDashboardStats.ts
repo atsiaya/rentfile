@@ -20,8 +20,8 @@ function currentMonthKey() {
 
 /**
  * Reads real Firestore data scoped to one property:
- *  - tenants/{propertyId}       → occupied units
- *  - payments (this month)      → collected vs outstanding
+ *  - tenants/{propertyId}       → occupied units and rent due
+ *  - payments (this month)      → collected amount
  *  - maintenanceRequests        → open count
  *
  * These collections are only ever written to once the Tenants, Ledger, and
@@ -47,28 +47,41 @@ export function useDashboardStats(propertyId: string | null, totalUnits: number)
 
     setStats((s) => ({ ...s, loading: true, totalUnits }));
 
+    let monthlyRentDue = 0;
+    let collectedThisMonth = 0;
+
+    // Keep the calculation in step with Collect Rent: both listen to all
+    // payments for the selected property and apply the month filter locally.
+    // A propertyId + monthKey Firestore query needs a composite index and can
+    // otherwise fail before the dashboard receives any payment records.
+    function updateRentStats() {
+      setStats((s) => ({
+        ...s,
+        collectedThisMonth,
+        outstanding: Math.max(monthlyRentDue - collectedThisMonth, 0),
+      }));
+    }
+
     const unsubTenants = onSnapshot(
       query(collection(db, "tenants"), where("propertyId", "==", propertyId)),
-      (snap) => setStats((s) => ({ ...s, occupiedUnits: snap.size, loading: false })),
+      (snap) => {
+        monthlyRentDue = snap.docs.reduce(
+          (total, doc) => total + (Number(doc.data().rent) || 0),
+          0
+        );
+        setStats((s) => ({ ...s, occupiedUnits: snap.size, loading: false }));
+        updateRentStats();
+      },
       () => setStats((s) => ({ ...s, loading: false }))
     );
 
     const unsubPayments = onSnapshot(
-      query(
-        collection(db, "payments"),
-        where("propertyId", "==", propertyId),
-        where("monthKey", "==", currentMonthKey())
-      ),
+      query(collection(db, "payments"), where("propertyId", "==", propertyId)),
       (snap) => {
-        let collected = 0;
-        let outstanding = 0;
-        snap.forEach((doc) => {
-          const d = doc.data();
-          const amount = Number(d.amount) || 0;
-          if (d.status === "Paid") collected += amount;
-          else outstanding += amount;
-        });
-        setStats((s) => ({ ...s, collectedThisMonth: collected, outstanding }));
+        collectedThisMonth = snap.docs
+          .filter((doc) => doc.data().monthKey === currentMonthKey())
+          .reduce((total, doc) => total + (Number(doc.data().amount) || 0), 0);
+        updateRentStats();
       },
       () => {}
     );

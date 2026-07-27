@@ -40,6 +40,12 @@ type Tenant = {
   createdAt: number; // millis, for client-side sorting
 };
 
+type Payment = {
+  tenantId: string;
+  amount: number;
+  monthKey: string;
+};
+
 // Accepts Kenyan mobile formats: 07xx/01xx (10 digits), +254 7xx/1xx,
 // or 254 7xx/1xx — with optional spaces/dashes in between.
 function isValidKenyanPhone(phone: string) {
@@ -391,6 +397,7 @@ export default function TenantsPage() {
   const router = useRouter();
   const { selected } = useProperty();
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [payments, setPayments] = useState<Payment[]>([]);
   const [tenantsLoading, setTenantsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -399,6 +406,7 @@ export default function TenantsPage() {
   useEffect(() => {
     if (!selected) {
       setTenants([]);
+      setPayments([]);
       setTenantsLoading(false);
       return;
     }
@@ -454,9 +462,44 @@ export default function TenantsPage() {
     return () => unsub();
   }, [selected]);
 
+  // This uses the same payments collection and month filter as Collect Rent.
+  // Tenant documents hold the tenancy details; payment totals must stay live
+  // as new collection records are added.
+  useEffect(() => {
+    if (!selected) return;
+
+    const unsub = onSnapshot(
+      query(collection(db, "payments"), where("propertyId", "==", selected.id)),
+      (snap) => {
+        setPayments(
+          snap.docs.map((d) => ({
+            tenantId: d.data().tenantId ?? "",
+            amount: Number(d.data().amount) || 0,
+            monthKey: d.data().monthKey ?? "",
+          }))
+        );
+      },
+      (err) => setLoadError(err.message || "Couldn't load payment records.")
+    );
+
+    return () => unsub();
+  }, [selected]);
+
   if (!selected) return <NoPropertySelected />;
 
-  const filtered = tenants.filter((t) =>
+  const paidByTenant = payments
+    .filter((payment) => payment.monthKey === currentMonthKey())
+    .reduce<Record<string, number>>((totals, payment) => {
+      totals[payment.tenantId] = (totals[payment.tenantId] ?? 0) + payment.amount;
+      return totals;
+    }, {});
+
+  const synchronizedTenants = tenants.map((tenant) => ({
+    ...tenant,
+    amountPaid: paidByTenant[tenant.id] ?? 0,
+  }));
+
+  const filtered = synchronizedTenants.filter((t) =>
     `${t.name} ${t.unit}`.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -576,10 +619,10 @@ export default function TenantsPage() {
                     <div className="flex justify-end">
                       <button
                         type="button"
-                        onClick={() => router.push(`/collect?tenant=${t.id}`)}
+                        onClick={() => router.push(`/collect`)}
                         className="rounded-lg border border-line px-2.5 py-1 text-[11px] font-semibold text-accent-ink transition hover:bg-accent-soft"
                       >
-                        Record payment
+                        Remind tenent
                       </button>
                     </div>
                   </div>
@@ -587,7 +630,7 @@ export default function TenantsPage() {
               })}
               {filtered.length === 0 && (
                 <p className="rounded-2xl border border-dashed border-line p-6 text-center text-sm text-muted">
-                  {tenants.length === 0 ? "No tenants added yet." : `No tenants match "${search}".`}
+                  {synchronizedTenants.length === 0 ? "No tenants added yet." : `No tenants match "${search}".`}
                 </p>
               )}
             </>
@@ -599,7 +642,7 @@ export default function TenantsPage() {
         <InviteTenantModal
           propertyId={selected.id}
           unitLabels={selected.unitLabels}
-          occupiedUnits={tenants.map((t) => t.unit)}
+          occupiedUnits={synchronizedTenants.map((t) => t.unit)}
           onClose={() => setShowInvite(false)}
         />
       )}
