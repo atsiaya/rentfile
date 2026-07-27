@@ -6,14 +6,39 @@ import { Building2 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { useProperty } from "@/lib/propertyContext";
 
-type Tenant = { id: string; name: string; unit: string; rent: number };
-type Payment = { id: string; tenantId: string; tenantName: string; unit: string; amount: number; method: string };
+type Tenant = {
+  id: string;
+  name: string;
+  unit: string;
+  rent: number;
+  amountPaid: number;
+};
+
+type Payment = {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  unit: string;
+  amount: number;
+  method: string;
+};
 
 const tabs = ["All", "Paid", "Due"] as const;
 
 function currentMonthKey() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// Same balance/status math as the tenants list and the collect flow, so a
+// tenant never shows "Paid" in one place and "Due" in another. Status is
+// derived from the tenant doc's own amountPaid field — the field collect
+// updates via increment() — not from summing a separate payments query.
+function paymentStatus(t: Tenant) {
+  const balance = Math.max(t.rent - t.amountPaid, 0);
+  const status: "Paid" | "Partial" | "Due" =
+    balance <= 0 && t.rent > 0 ? "Paid" : t.amountPaid > 0 ? "Partial" : "Due";
+  return { balance, status };
 }
 
 export default function LedgerPage() {
@@ -28,6 +53,7 @@ export default function LedgerPage() {
       setPayments([]);
       return;
     }
+
     const unsubT = onSnapshot(
       query(collection(db, "tenants"), where("propertyId", "==", selected.id)),
       (snap) =>
@@ -37,9 +63,12 @@ export default function LedgerPage() {
             name: d.data().name ?? "",
             unit: d.data().unit ?? "",
             rent: Number(d.data().rent) || 0,
+            amountPaid: Number(d.data().amountPaid) || 0,
           }))
         )
     );
+
+    // Recent-payments feed only — no longer used to derive status.
     const unsubP = onSnapshot(
       query(
         collection(db, "payments"),
@@ -59,6 +88,7 @@ export default function LedgerPage() {
           }))
         )
     );
+
     return () => {
       unsubT();
       unsubP();
@@ -79,17 +109,17 @@ export default function LedgerPage() {
     );
   }
 
-  // Per-tenant status for the current month: paid-so-far vs rent owed.
   const rows = tenants.map((t) => {
-    const paid = payments
-      .filter((p) => p.tenantId === t.id)
-      .reduce((sum, p) => sum + p.amount, 0);
-    const status: "Paid" | "Due" = paid >= t.rent && t.rent > 0 ? "Paid" : "Due";
-    return { ...t, paid, status };
+    const { balance, status } = paymentStatus(t);
+    return { ...t, balance, status };
   });
 
-  const filtered = rows.filter((r) => tab === "All" || r.status === tab);
-  const outstanding = rows.reduce((sum, r) => sum + Math.max(r.rent - r.paid, 0), 0);
+  // Tabs stay binary (Paid / Due); "Partial" tenants count as Due here
+  // since they still owe a balance.
+  const filtered = rows.filter(
+    (r) => tab === "All" || (tab === "Paid" ? r.status === "Paid" : r.status !== "Paid")
+  );
+  const outstanding = rows.reduce((sum, r) => sum + r.balance, 0);
 
   return (
     <div className="space-y-4">
@@ -113,7 +143,9 @@ export default function LedgerPage() {
               key={t}
               onClick={() => setTab(t)}
               className={`rounded-full border px-4 py-2 text-sm font-medium transition ${
-                tab === t ? "border-accent bg-accent-soft text-accent-ink" : "border-line bg-bg text-muted hover:border-accent/50"
+                tab === t
+                  ? "border-accent bg-accent-soft text-accent-ink"
+                  : "border-line bg-bg text-muted hover:border-accent/50"
               }`}
             >
               {t}
@@ -131,13 +163,17 @@ export default function LedgerPage() {
                 <div>
                   <p className="text-sm font-medium text-fg">{r.name}</p>
                   <p className="text-xs text-muted">
-                    KES {r.paid.toLocaleString()} of {r.rent.toLocaleString()} this month
+                    KES {r.amountPaid.toLocaleString()} of {r.rent.toLocaleString()} this month
                   </p>
                 </div>
               </div>
               <span
                 className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                  r.status === "Paid" ? "bg-good-soft text-good" : "bg-accent-soft text-accent-ink"
+                  r.status === "Paid"
+                    ? "bg-good-soft text-good"
+                    : r.status === "Partial"
+                    ? "bg-yellow-100 text-yellow-700"
+                    : "bg-accent-soft text-accent-ink"
                 }`}
               >
                 {r.status}
@@ -156,9 +192,16 @@ export default function LedgerPage() {
             </p>
             <div className="space-y-2">
               {payments.map((p) => (
-                <div key={p.id} className="flex items-center justify-between rounded-xl border border-line px-4 py-2.5 text-sm">
-                  <span className="text-fg">{p.unit} — {p.tenantName}</span>
-                  <span className="font-mono text-muted">KES {p.amount.toLocaleString()} · {p.method}</span>
+                <div
+                  key={p.id}
+                  className="flex items-center justify-between rounded-xl border border-line px-4 py-2.5 text-sm"
+                >
+                  <span className="text-fg">
+                    {p.unit} — {p.tenantName}
+                  </span>
+                  <span className="font-mono text-muted">
+                    KES {p.amount.toLocaleString()} · {p.method}
+                  </span>
                 </div>
               ))}
             </div>
