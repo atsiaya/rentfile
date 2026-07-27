@@ -122,7 +122,7 @@ function DashboardChrome({ children }: { children: React.ReactNode }) {
             ))}
             {canManageProperties && (
               <Link
-                href="/dashboard/collect"
+                href="/dashboard/properties/new"
                 onClick={() => setPropertyMenuOpen(false)}
                 className="mt-1 flex items-center gap-2 rounded-xl border-t border-line px-3 py-2.5 text-sm font-medium text-accent-ink transition hover:bg-accent-soft"
               >
