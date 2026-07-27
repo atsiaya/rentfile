@@ -47,6 +47,13 @@ function isValidKenyanPhone(phone: string) {
   return /^(?:\+254|254|0)(7|1)\d{8}$/.test(digits);
 }
 
+// Must match the monthKey format used everywhere else (ledger, collect)
+// so a payment recorded here shows up consistently on every page.
+function currentMonthKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 function paymentInfo(t: Tenant) {
   const balance = Math.max(t.rent - t.amountPaid, 0);
   const label =
@@ -190,18 +197,40 @@ function InviteTenantModal({
 
     setSaving(true);
     try {
-      await addDoc(collection(db, "tenants"), {
+      const initialPaid = Number(amountPaid) || 0;
+      const rentAmount = Number(rent) || 0;
+
+      const tenantRef = await addDoc(collection(db, "tenants"), {
         propertyId,
         name,
         unit,
         phone,
         email,
-        rent: Number(rent) || 0,
-        amountPaid: Number(amountPaid) || 0,
+        rent: rentAmount,
+        amountPaid: initialPaid,
         status: "Current",
         autopayEnabled: false,
         createdAt: serverTimestamp(),
       });
+
+      // Every other page (ledger, collect) reads the "payments" collection
+      // for history and, in some cases, for status — not just the tenant
+      // doc's amountPaid. Without this, a tenant invited with money already
+      // paid shows "Partial" here but "Due/no payment" anywhere that sums
+      // payments, since no payment record ever existed for that amount.
+      if (initialPaid > 0) {
+        await addDoc(collection(db, "payments"), {
+          propertyId,
+          tenantId: tenantRef.id,
+          tenantName: name,
+          unit,
+          amount: initialPaid,
+          method: "Initial payment",
+          monthKey: currentMonthKey(),
+          createdAt: serverTimestamp(),
+        });
+      }
+
       setAdded({ name, unit });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't add that tenant.");
