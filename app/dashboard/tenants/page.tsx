@@ -620,9 +620,11 @@ export default function TenantsPage() {
                       <button
                         type="button"
                         onClick={() => router.push(`/collect`)}
-                        className="rounded-lg border border-line px-2.5 py-1 text-[11px] font-semibold text-accent-ink transition hover:bg-accent-soft"
+                        disabled={balance <= 0}
+                        title={balance <= 0 ? "Rent is fully paid for this month" : "Send a rent reminder"}
+                        className="rounded-lg border border-line px-2.5 py-1 text-[11px] font-semibold text-accent-ink transition hover:bg-accent-soft disabled:cursor-not-allowed disabled:border-good/30 disabled:bg-good-soft disabled:text-good disabled:hover:bg-good-soft"
                       >
-                        Remind tenent
+                        {balance <= 0 ? "Rent paid" : "Send reminder"}
                       </button>
                     </div>
                   </div>

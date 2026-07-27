@@ -6,7 +6,6 @@ import {
   collection,
   doc,
   onSnapshot,
-  orderBy,
   query,
   serverTimestamp,
   updateDoc,
@@ -61,17 +60,21 @@ export default function MaintenancePage() {
       }
     );
     const unsubR = onSnapshot(
-      query(collection(db, "maintenanceRequests"), where("propertyId", "==", selected.id), orderBy("createdAt", "desc")),
-      (snap) =>
-        setRequests(
-          snap.docs.map((d) => ({
+      // Sort after reading so the page works without a composite Firestore
+      // index for propertyId + createdAt.
+      query(collection(db, "maintenanceRequests"), where("propertyId", "==", selected.id)),
+      (snap) => {
+        const rows = snap.docs.map((d) => ({
             id: d.id,
             unit: d.data().unit ?? "",
             tenant: d.data().tenant ?? "",
             issue: d.data().issue ?? "",
             status: d.data().status ?? "Open",
-          }))
-        )
+            createdAt: d.data().createdAt?.toMillis?.() ?? 0,
+          }));
+        rows.sort((a, b) => b.createdAt - a.createdAt);
+        setRequests(rows);
+      }
     );
     return () => {
       unsubT();

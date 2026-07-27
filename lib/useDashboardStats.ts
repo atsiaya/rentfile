@@ -87,12 +87,15 @@ export function useDashboardStats(propertyId: string | null, totalUnits: number)
     );
 
     const unsubMaintenance = onSnapshot(
-      query(
-        collection(db, "maintenanceRequests"),
-        where("propertyId", "==", propertyId),
-        where("status", "!=", "Resolved")
-      ),
-      (snap) => setStats((s) => ({ ...s, openMaintenance: snap.size })),
+      // Filter the status locally. Combining the property filter with a
+      // `!=` filter requires an index and causes the dashboard total to stay
+      // blank when that index has not been created yet.
+      query(collection(db, "maintenanceRequests"), where("propertyId", "==", propertyId)),
+      (snap) =>
+        setStats((s) => ({
+          ...s,
+          openMaintenance: snap.docs.filter((request) => request.data().status !== "Resolved").length,
+        })),
       () => {}
     );
 
