@@ -4,9 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import {
   addDoc,
   collection,
+  doc,
+  increment,
   onSnapshot,
   query,
   serverTimestamp,
+  updateDoc,
   where,
 } from "firebase/firestore";
 import {
@@ -38,6 +41,13 @@ type Tenant = {
   status: "Current" | "Arrears";
   createdAt: number; // millis, for client-side sorting
 };
+
+// Accepts Kenyan mobile formats: 07xx/01xx (10 digits), +254 7xx/1xx,
+// or 254 7xx/1xx — with optional spaces/dashes in between.
+function isValidKenyanPhone(phone: string) {
+  const digits = phone.replace(/[\s-]/g, "");
+  return /^(?:\+254|254|0)(7|1)\d{8}$/.test(digits);
+}
 
 function paymentInfo(t: Tenant) {
   const balance = Math.max(t.rent - t.amountPaid, 0);
@@ -137,6 +147,93 @@ function NoPropertySelected() {
   );
 }
 
+/**
+ * Inline control for recording a rent payment against a tenant.
+ * Uses Firestore's increment() so simultaneous payments (e.g. two people
+ * recording a partial payment around the same time) add up correctly
+ * instead of one write overwriting the other.
+ */
+function RecordPayment({ tenantId }: { tenantId: string }) {
+  const [open, setOpen] = useState(false);
+  const [amount, setAmount] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSave() {
+    const value = Number(amount);
+    if (!value || value <= 0) {
+      setError("Enter a valid amount.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await updateDoc(doc(db, "tenants", tenantId), {
+        amountPaid: increment(value),
+      });
+      setAmount("");
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't save payment.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="rounded-lg border border-line px-2.5 py-1 text-[11px] font-semibold text-accent-ink transition hover:bg-accent-soft"
+      >
+        Record payment
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <input
+        autoFocus
+        inputMode="numeric"
+        value={amount}
+        onChange={(e) => {
+          setAmount(e.target.value);
+          if (error) setError(null);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") handleSave();
+          if (e.key === "Escape") setOpen(false);
+        }}
+        placeholder="Amount"
+        className="w-24 rounded-lg border border-line bg-bg px-2 py-1 text-xs outline-none focus:border-accent focus:ring-2 focus:ring-accent-soft"
+      />
+      <button
+        type="button"
+        onClick={handleSave}
+        disabled={saving}
+        className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1 text-[11px] font-semibold text-white transition hover:brightness-105 disabled:opacity-60"
+      >
+        {saving && <Loader2 className="h-3 w-3 animate-spin" />}
+        Save
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setOpen(false);
+          setAmount("");
+          setError(null);
+        }}
+        className="text-[11px] text-muted hover:text-fg"
+      >
+        Cancel
+      </button>
+      {error && <span className="w-full text-[11px] text-red-600">{error}</span>}
+    </div>
+  );
+}
+
 /** Invite-tenant modal — its own component so form state resets cleanly each time it opens. */
 function InviteTenantModal({
   propertyId,
@@ -160,6 +257,7 @@ function InviteTenantModal({
   const [amountPaid, setAmountPaid] = useState("0");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
   const [added, setAdded] = useState<{ name: string; unit: string } | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -171,6 +269,11 @@ function InviteTenantModal({
     // the write goes to Firestore.
     if (!unit || occupiedUnits.includes(unit)) {
       setError("That unit is already occupied — pick a different one.");
+      return;
+    }
+
+    if (!isValidKenyanPhone(phone)) {
+      setPhoneError("Enter a valid phone number, e.g. 0722 123 456 or +254 722 123 456.");
       return;
     }
 
@@ -506,6 +609,11 @@ export default function TenantsPage() {
                           {balance.toLocaleString()}
                         </p>
                       </div>
+                    </div>
+
+                    {/* Record a new payment against this tenant's balance */}
+                    <div className="flex justify-end">
+                      <RecordPayment tenantId={t.id} />
                     </div>
                   </div>
                 );
