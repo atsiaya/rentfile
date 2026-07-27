@@ -1,15 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   addDoc,
   collection,
-  doc,
-  increment,
   onSnapshot,
   query,
   serverTimestamp,
-  updateDoc,
   where,
 } from "firebase/firestore";
 import {
@@ -143,93 +141,6 @@ function NoPropertySelected() {
         Pick a property from the sidebar (or add one) to see and manage its
         tenants.
       </p>
-    </div>
-  );
-}
-
-/**
- * Inline control for recording a rent payment against a tenant.
- * Uses Firestore's increment() so simultaneous payments (e.g. two people
- * recording a partial payment around the same time) add up correctly
- * instead of one write overwriting the other.
- */
-function RecordPayment({ tenantId }: { tenantId: string }) {
-  const [open, setOpen] = useState(false);
-  const [amount, setAmount] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleSave() {
-    const value = Number(amount);
-    if (!value || value <= 0) {
-      setError("Enter a valid amount.");
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    try {
-      await updateDoc(doc(db, "tenants", tenantId), {
-        amountPaid: increment(value),
-      });
-      setAmount("");
-      setOpen(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't save payment.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="rounded-lg border border-line px-2.5 py-1 text-[11px] font-semibold text-accent-ink transition hover:bg-accent-soft"
-      >
-        Record payment
-      </button>
-    );
-  }
-
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <input
-        autoFocus
-        inputMode="numeric"
-        value={amount}
-        onChange={(e) => {
-          setAmount(e.target.value);
-          if (error) setError(null);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") handleSave();
-          if (e.key === "Escape") setOpen(false);
-        }}
-        placeholder="Amount"
-        className="w-24 rounded-lg border border-line bg-bg px-2 py-1 text-xs outline-none focus:border-accent focus:ring-2 focus:ring-accent-soft"
-      />
-      <button
-        type="button"
-        onClick={handleSave}
-        disabled={saving}
-        className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1 text-[11px] font-semibold text-white transition hover:brightness-105 disabled:opacity-60"
-      >
-        {saving && <Loader2 className="h-3 w-3 animate-spin" />}
-        Save
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setOpen(false);
-          setAmount("");
-          setError(null);
-        }}
-        className="text-[11px] text-muted hover:text-fg"
-      >
-        Cancel
-      </button>
-      {error && <span className="w-full text-[11px] text-red-600">{error}</span>}
     </div>
   );
 }
@@ -401,8 +312,26 @@ function InviteTenantModal({
             <label className="mb-2 block text-sm font-semibold text-fg">Phone</label>
             <div className="relative flex items-center">
               <Phone className="pointer-events-none absolute left-4 h-[18px] w-[18px] text-muted" strokeWidth={1.75} />
-              <input required value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0722 123 456" className={`${fieldClass} pl-12`} />
+              <input
+                required
+                type="tel"
+                inputMode="tel"
+                value={phone}
+                onChange={(e) => {
+                  setPhone(e.target.value);
+                  if (phoneError) setPhoneError(null);
+                }}
+                onBlur={() => {
+                  if (phone && !isValidKenyanPhone(phone)) {
+                    setPhoneError("Enter a valid phone number, e.g. 0722 123 456 or +254 722 123 456.");
+                  }
+                }}
+                placeholder="0722 123 456"
+                aria-invalid={!!phoneError}
+                className={`${fieldClass} pl-12 ${phoneError ? "border-red-400 focus:border-red-400 focus:ring-red-100" : ""}`}
+              />
             </div>
+            {phoneError && <p className="mt-1.5 text-xs text-red-600">{phoneError}</p>}
           </div>
 
           <div>
@@ -430,6 +359,7 @@ function InviteTenantModal({
 }
 
 export default function TenantsPage() {
+  const router = useRouter();
   const { selected } = useProperty();
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [tenantsLoading, setTenantsLoading] = useState(true);
@@ -611,9 +541,17 @@ export default function TenantsPage() {
                       </div>
                     </div>
 
-                    {/* Record a new payment against this tenant's balance */}
+                    {/* Deep-links into the /collect route, which reads the
+                        `tenant` query param and opens the payment-collection
+                        modal pre-scoped to this tenant. */}
                     <div className="flex justify-end">
-                      <RecordPayment tenantId={t.id} />
+                      <button
+                        type="button"
+                        onClick={() => router.push(`/collect?tenant=${t.id}`)}
+                        className="rounded-lg border border-line px-2.5 py-1 text-[11px] font-semibold text-accent-ink transition hover:bg-accent-soft"
+                      >
+                        Record payment
+                      </button>
                     </div>
                   </div>
                 );
