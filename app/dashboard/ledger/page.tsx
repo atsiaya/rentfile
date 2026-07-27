@@ -12,6 +12,7 @@ type Tenant = {
   unit: string;
   rent: number;
   amountPaid: number;
+  amountPaidMonthKey: string;
 };
 
 type Payment = {
@@ -32,13 +33,21 @@ function currentMonthKey() {
 
 // Same balance/status math as the tenants list and the collect flow, so a
 // tenant never shows "Paid" in one place and "Due" in another. Status is
-// derived from the tenant doc's own amountPaid field — the field collect
-// updates via increment() — not from summing a separate payments query.
+// derived from the tenant doc's own amountPaid field — the field Collect
+// Rent updates transactionally — not from summing a separate payments query.
+//
+// Critically: amountPaid only counts if it was actually recorded THIS
+// month (amountPaidMonthKey matches). The moment the calendar rolls over,
+// last month's total stops being read as if it were this month's — even
+// before a new payment comes in — because the transaction that writes
+// amountPaid resets it to 0 for the new month key rather than carrying the
+// old number forward.
 function paymentStatus(t: Tenant) {
-  const balance = Math.max(t.rent - t.amountPaid, 0);
+  const paidThisMonth = t.amountPaidMonthKey === currentMonthKey() ? t.amountPaid : 0;
+  const balance = Math.max(t.rent - paidThisMonth, 0);
   const status: "Paid" | "Partial" | "Due" =
-    balance <= 0 && t.rent > 0 ? "Paid" : t.amountPaid > 0 ? "Partial" : "Due";
-  return { balance, status };
+    balance <= 0 && t.rent > 0 ? "Paid" : paidThisMonth > 0 ? "Partial" : "Due";
+  return { paidThisMonth, balance, status };
 }
 
 export default function LedgerPage() {
@@ -64,6 +73,7 @@ export default function LedgerPage() {
             unit: d.data().unit ?? "",
             rent: Number(d.data().rent) || 0,
             amountPaid: Number(d.data().amountPaid) || 0,
+            amountPaidMonthKey: d.data().amountPaidMonthKey ?? "",
           }))
         )
     );
@@ -110,8 +120,8 @@ export default function LedgerPage() {
   }
 
   const rows = tenants.map((t) => {
-    const { balance, status } = paymentStatus(t);
-    return { ...t, balance, status };
+    const { paidThisMonth, balance, status } = paymentStatus(t);
+    return { ...t, paidThisMonth, balance, status };
   });
 
   // Tabs stay binary (Paid / Due); "Partial" tenants count as Due here
@@ -163,7 +173,7 @@ export default function LedgerPage() {
                 <div>
                   <p className="text-sm font-medium text-fg">{r.name}</p>
                   <p className="text-xs text-muted">
-                    KES {r.amountPaid.toLocaleString()} of {r.rent.toLocaleString()} this month
+                    KES {r.paidThisMonth.toLocaleString()} of {r.rent.toLocaleString()} this month
                   </p>
                 </div>
               </div>
