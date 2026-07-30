@@ -86,6 +86,21 @@ function parseDate(d: string): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+/** Converts a 12-hour time like "3:35 PM" into the 24-hour "HH:MM" format
+ * <input type="time"> actually requires. Without this, the extracted time
+ * is silently rejected by the browser and the field just stays empty —
+ * it looks like extraction failed when it actually succeeded. */
+function to24HourTime(raw: string): string | null {
+  const m = raw.match(/(\d{1,2}):(\d{2})\s*([AP]M)/i);
+  if (!m) return null;
+  const [, hh, mm, apRaw] = m;
+  let hour = parseInt(hh, 10);
+  const ap = apRaw.toUpperCase();
+  if (ap === "PM" && hour !== 12) hour += 12;
+  if (ap === "AM" && hour === 12) hour = 0;
+  return `${String(hour).padStart(2, "0")}:${mm}`;
+}
+
 /**
  * Reduces any phone representation — full ("0722111222", "+254722111222")
  * or Safaricom's privacy-masked SMS format ("0710***565") — down to a
@@ -194,7 +209,10 @@ function AddPaymentModal({
 
     const parsed = result.date ? parseDate(result.date) : null;
     if (parsed) setDate(toLocalDateInputValue(parsed));
-    if (result.time) setTime(result.time);
+    if (result.time) {
+      const t24 = to24HourTime(result.time);
+      if (t24) setTime(t24);
+    }
 
     // Actually verify the SMS against THIS tenant's on-file phone/name —
     // masked-aware for phone, fuzzy substring for name — rather than just
