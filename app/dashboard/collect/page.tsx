@@ -32,6 +32,7 @@ type Tenant = {
   name: string;
   unit: string;
   rent: number;
+  phone: string;
 };
 
 type Payment = {
@@ -50,7 +51,7 @@ type Extracted = {
   time: string;
 };
 
-type MatchMethod = "phone" | "email" | "name" | null;
+type MatchMethod = "phone" | "name" | null;
 
 const methods = ["M-Pesa", "Bank transfer", "Cash"] as const;
 
@@ -63,40 +64,19 @@ function monthLabel(key: string) {
   return new Date(y, m - 1, 1).toLocaleDateString("en-KE", { month: "long", year: "numeric" });
 }
 
-/** Normalizes any Kenyan phone format down to its last 9 digits, so
- * "0722 111 222", "+254722111222", and "254722111222" all compare equal. */
-function normalizePhone(raw: string): string {
-  const digits = raw.replace(/\D/g, "");
-  return digits.slice(-9);
+/** Formats a Date as the local calendar day (YYYY-MM-DD) for an <input
+ * type="date">. NEVER use Date.toISOString() for this — it converts to UTC
+ * first, so for Kenya (UTC+3) local midnight on the 24th becomes 21:00 UTC
+ * on the 23rd, and the date silently shifts back a day. */
+function toLocalDateInputValue(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
-/**
- * Pulls sender name, phone, email, amount, date, and time out of a pasted
- * payment confirmation message (M-Pesa's format is the primary target, but
- * the patterns are loose enough to catch similar bank/SMS confirmations).
- * Anything it can't find is left blank for the landlord to fill in by hand.
- */
-function extractFromMessage(text: string): Extracted {
-  const amountMatch = text.match(/(?:Ksh|KES|KSH)\s?([\d,]+(?:\.\d{1,2})?)/i);
-  const nameMatch = text.match(
-    /(?:received from|from)\s+([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,3})\s+(?:\d{9,}|on\b)/i
-  );
-  const phoneMatch = text.match(/(?:\+?254|0)7\d{8}/);
-  const emailMatch = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
-  const dateMatch = text.match(/on\s+(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
-  const timeMatch = text.match(/at\s+(\d{1,2}:\d{2}\s?[APap]\.?[Mm]\.?)/i);
-
-  return {
-    name: nameMatch?.[1]?.trim() ?? "",
-    phone: phoneMatch?.[0] ?? "",
-    email: emailMatch?.[0] ?? "",
-    amount: amountMatch?.[1]?.replace(/,/g, "") ?? "",
-    date: dateMatch?.[1] ?? "",
-    time: timeMatch?.[1]?.replace(/\./g, "").toUpperCase() ?? "",
-  };
-}
-
-/** DD/MM/YY or DD/MM/YYYY → a real Date, for computing the correct monthKey. */
+/** DD/MM/YY or DD/MM/YYYY → a real Date, for computing the correct monthKey
+ * and for pre-filling the date field. */
 function parseDate(d: string): Date | null {
   const m = d.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if (!m) return null;
@@ -104,6 +84,80 @@ function parseDate(d: string): Date | null {
   const year = yearRaw.length === 2 ? 2000 + Number(yearRaw) : Number(yearRaw);
   const parsed = new Date(year, Number(month) - 1, Number(day));
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
+ * Reduces any phone representation — full ("0722111222", "+254722111222")
+ * or Safaricom's privacy-masked SMS format ("0710***565") — down to a
+ * 9-character local string with the leading 0/254 stripped, keeping any
+ * "*" characters as-is. Both a stored tenant number and a masked SMS
+ * number normalize to the same shape, which is what makes comparing them
+ * possible at all.
+ */
+function normalizeLocal9(raw: string): string {
+  let d = raw.replace(/[^\d*]/g, "");
+  if (d.startsWith("254")) d = d.slice(3);
+  else if (d.startsWith("0")) d = d.slice(1);
+  return d.slice(-9);
+}
+
+/**
+ * Compares a tenant's on-file phone number against a phone number pulled
+ * from an SMS, tolerating masked digits. A "*" in the SMS number matches
+ * any digit; every other position must match exactly. This is the only way
+ * to verify a masked number at all — Safaricom's own confirmation SMS
+ * never reveals the middle digits, so exact string equality would never
+ * succeed on a real message.
+ */
+function phoneMatches(tenantPhone: string, extractedPhone: string): boolean {
+  if (!tenantPhone || !extractedPhone) return false;
+  const a = normalizeLocal9(tenantPhone);
+  const b = normalizeLocal9(extractedPhone);
+  if (a.length !== 9 || b.length !== 9) return false;
+  for (let i = 0; i < 9; i++) {
+    if (b[i] === "*") continue;
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Pulls sender name, phone, amount, date, and time out of a pasted payment
+ * confirmation message. Safaricom's actual format masks the middle of the
+ * phone number ("0710***565") and sometimes has a double space between
+ * first and last name — both patterns below account for that; a plain
+ * digit-only assumption (no asterisks) misses real M-Pesa messages
+ * entirely, which is what was happening before.
+ */
+function extractFromMessage(text: string): Extracted {
+  const amountMatch = text.match(/(?:Ksh|KES|KSH)\s?([\d,]+(?:\.\d{1,2})?)/i);
+
+  // Name ends where a phone-like token (digits and/or mask asterisks, 6+
+  // chars) or the word "on" begins — not "9+ pure digits", which a masked
+  // number like "0710***565" never satisfies.
+  const nameMatch = text.match(
+    /(?:received from|from)\s+([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,3})\s+(?:[\d*]{6,}|on\b)/i
+  );
+
+  // Matches both a full number ("0722123456") and Safaricom's masked SMS
+  // format ("0710***565" / "254710***565").
+  const phoneMatch = text.match(
+    /(?:\+?254|0)7\d{8}|(?:\+?254|0)\d{1,3}\*{2,6}\d{1,4}/
+  );
+
+  const emailMatch = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+  const dateMatch = text.match(/on\s+(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
+  const timeMatch = text.match(/at\s+(\d{1,2}:\d{2}\s?[APap]\.?[Mm]\.?)/i);
+
+  return {
+    // Collapse the double space Safaricom sometimes puts between names.
+    name: nameMatch?.[1]?.replace(/\s+/g, " ").trim() ?? "",
+    phone: phoneMatch?.[0] ?? "",
+    email: emailMatch?.[0] ?? "",
+    amount: amountMatch?.[1]?.replace(/,/g, "") ?? "",
+    date: dateMatch?.[1] ?? "",
+    time: timeMatch?.[1]?.replace(/\./g, "").toUpperCase() ?? "",
+  };
 }
 
 /** Add-payment modal, scoped to one tenant. Paste an SMS to auto-fill amount
@@ -125,7 +179,7 @@ function AddPaymentModal({
   const [extracted, setExtracted] = useState<Extracted | null>(null);
   const [matchMethod, setMatchMethod] = useState<MatchMethod>(null);
   const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => toLocalDateInputValue(new Date()));
   const [time, setTime] = useState("");
   const [method, setMethod] = useState<typeof methods[number]>("M-Pesa");
   const [saving, setSaving] = useState(false);
@@ -139,20 +193,23 @@ function AddPaymentModal({
     if (/m-?pesa/i.test(message)) setMethod("M-Pesa");
 
     const parsed = result.date ? parseDate(result.date) : null;
-    if (parsed) setDate(parsed.toISOString().slice(0, 10));
+    if (parsed) setDate(toLocalDateInputValue(parsed));
     if (result.time) setTime(result.time);
 
-    // Sanity-check the SMS actually belongs to this tenant (by phone, since
-    // that's the most reliable identifier in a payment SMS). We still record
-    // the payment against the tenant whose "+" was tapped either way — this
-    // is just a heads-up, not a hard gate.
+    // Actually verify the SMS against THIS tenant's on-file phone/name —
+    // masked-aware for phone, fuzzy substring for name — rather than just
+    // checking that some phone number was present at all.
     let via: MatchMethod = null;
-    if (result.phone && tenant && normalizePhone(result.phone)) {
+    if (result.phone && phoneMatches(tenant.phone, result.phone)) {
       via = "phone";
     } else if (result.name) {
-      via = "name";
+      const needle = result.name.toLowerCase();
+      const tenantName = tenant.name.toLowerCase();
+      if (tenantName === needle || needle.includes(tenantName) || tenantName.includes(needle)) {
+        via = "name";
+      }
     }
-    setMatchMethod(result.phone || result.name ? via : null);
+    setMatchMethod(via);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -230,7 +287,7 @@ function AddPaymentModal({
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             rows={3}
-            placeholder="e.g. “QFH3XXXXXX Confirmed. Ksh28,000.00 received from JANE WANJIRU 0722123456 on 21/7/26 at 2:45 PM…”"
+            placeholder="e.g. “QFH3XXXXXX Confirmed. You have received Ksh2,500.00 from JACK WACHANA 0710***565 on 24/7/26 at 3:35 PM…”"
             className="w-full rounded-2xl border border-line bg-bg-alt px-4 py-3.5 text-sm text-fg placeholder:text-muted/70 outline-none transition focus:border-accent focus:ring-4 focus:ring-accent-soft"
           />
           <button
@@ -259,7 +316,7 @@ function AddPaymentModal({
             {matchMethod ? (
               <div className="flex items-center gap-2 rounded-2xl bg-good-soft px-4 py-2.5 text-sm text-good">
                 <CheckCircle2 className="h-4 w-4 shrink-0" strokeWidth={1.75} />
-                SMS {matchMethod === "phone" ? "phone number" : "name"} looks like it matches {tenant.name}.
+                SMS {matchMethod === "phone" ? "phone number" : "name"} matches {tenant.name}.
               </div>
             ) : (
               <div className="flex items-center gap-2 rounded-2xl bg-accent-soft px-4 py-2.5 text-sm text-accent-ink">
@@ -381,6 +438,7 @@ export default function CollectRentPage() {
             name: d.data().name ?? "",
             unit: d.data().unit ?? "",
             rent: Number(d.data().rent) || 0,
+            phone: d.data().phone ?? "",
           }))
           .sort((a, b) => a.unit.localeCompare(b.unit));
         setTenants(rows);
