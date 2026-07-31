@@ -1,34 +1,69 @@
 import { NextResponse } from "next/server";
 
-/**
- * Sends a rent-reminder email to one tenant via Resend. Requires
- * RESEND_API_KEY and RESEND_FROM_EMAIL — see .env.local.example and the
- * setup notes wherever this route is documented.
- */
+function escapeHtml(text: string) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 export async function POST(req: Request) {
   try {
-    const { tenantEmail, tenantName, unit, propertyName, balance, senderEmail } =
-      await req.json();
+    const {
+      tenantEmail,
+      tenantName,
+      unit,
+      propertyName,
+      balance,
+      senderEmail,
+    } = await req.json();
 
-    if (!tenantEmail || !propertyName || balance == null) {
+    // Validate required fields
+    if (!tenantEmail || !propertyName || balance === undefined || balance === null) {
       return NextResponse.json(
-        { error: "Missing tenantEmail, propertyName, or balance." },
+        {
+          error:
+            "Missing required fields: tenantEmail, propertyName or balance.",
+        },
         { status: 400 }
       );
     }
 
     const apiKey = process.env.RESEND_API_KEY;
     const fromAddress = process.env.RESEND_FROM_EMAIL;
-    if (!apiKey || !fromAddress) {
+
+    if (!apiKey) {
       return NextResponse.json(
-        { error: "Email isn't configured yet (missing RESEND_API_KEY or RESEND_FROM_EMAIL)." },
+        {
+          error: "RESEND_API_KEY is missing.",
+        },
         { status: 500 }
       );
     }
 
-    const amount = Number(balance).toLocaleString();
+    if (!fromAddress) {
+      return NextResponse.json(
+        {
+          error: "RESEND_FROM_EMAIL is missing.",
+        },
+        { status: 500 }
+      );
+    }
 
-    const emailRes = await fetch("https://api.resend.com/emails", {
+    const amount = Number(balance);
+
+    if (Number.isNaN(amount)) {
+      return NextResponse.json(
+        {
+          error: "Balance must be a valid number.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -37,27 +72,73 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         from: fromAddress,
         to: [tenantEmail],
-        subject: `Rent reminder — Unit ${unit}, ${propertyName}`,
+        subject: `Rent Reminder — Unit ${unit} (${propertyName})`,
         html: `
-          <p>Hi ${tenantName || "there"},</p>
-          <p>This is a reminder that <strong>KES ${amount}</strong> is still due for
-          Unit ${unit} at <strong>${propertyName}</strong>.</p>
-          <p>If you've already paid, please disregard this message — reply directly
-          if you'd like to confirm it's been received.</p>
+          <div style="font-family:Arial,sans-serif;line-height:1.6;font-size:16px">
+            <h2>Rent Reminder</h2>
+
+            <p>Hello ${escapeHtml(tenantName || "Tenant")},</p>
+
+            <p>
+              This is a friendly reminder that your outstanding rent balance is:
+            </p>
+
+            <h3 style="color:#b7791f">
+              KES ${amount.toLocaleString()}
+            </h3>
+
+            <table cellpadding="6">
+              <tr>
+                <td><strong>Property</strong></td>
+                <td>${escapeHtml(propertyName)}</td>
+              </tr>
+              <tr>
+                <td><strong>Unit</strong></td>
+                <td>${escapeHtml(unit || "-")}</td>
+              </tr>
+            </table>
+
+            <p>
+              If you have already made payment, kindly disregard this email.
+            </p>
+
+            <p>Thank you.</p>
+          </div>
         `,
         ...(senderEmail ? { reply_to: senderEmail } : {}),
       }),
     });
 
-    if (!emailRes.ok) {
-      const detail = await emailRes.text();
-      console.error("Resend error:", detail);
-      return NextResponse.json({ error: "The email service rejected the request." }, { status: 502 });
+    const result = await response.json();
+
+    if (!response.ok) {
+      console.error("Resend API Error:", result);
+
+      return NextResponse.json(
+        {
+          error: result?.message || result?.error || "Failed to send email.",
+          resend: result,
+        },
+        {
+          status: response.status,
+        }
+      );
     }
 
-    return NextResponse.json({ ok: true });
-  } catch (err) {
-    console.error("send-reminder failed:", err);
-    return NextResponse.json({ error: "Something went wrong." }, { status: 500 });
+    return NextResponse.json({
+      success: true,
+      id: result.id,
+    });
+  } catch (error) {
+    console.error("Send reminder failed:", error);
+
+    return NextResponse.json(
+      {
+        error: error instanceof Error ? error.message : "Internal Server Error",
+      },
+      {
+        status: 500,
+      }
+    );
   }
 }
