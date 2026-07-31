@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   addDoc,
   collection,
@@ -27,6 +26,7 @@ import {
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { useProperty } from "@/lib/propertyContext";
+import { useUserRecord } from "@/lib/useUserRecord";
 
 type Tenant = {
   id: string;
@@ -45,6 +45,8 @@ type Payment = {
   amount: number;
   monthKey: string;
 };
+
+type ReminderState = "sending" | "sent" | "error";
 
 // Accepts Kenyan mobile formats: 07xx/01xx (10 digits), +254 7xx/1xx,
 // or 254 7xx/1xx — with optional spaces/dashes in between.
@@ -394,14 +396,15 @@ function InviteTenantModal({
 }
 
 export default function TenantsPage() {
-  const router = useRouter();
   const { selected } = useProperty();
+  const { profile } = useUserRecord();
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [tenantsLoading, setTenantsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showInvite, setShowInvite] = useState(false);
+  const [reminderState, setReminderState] = useState<Record<string, ReminderState>>({});
 
   useEffect(() => {
     if (!selected) {
@@ -503,6 +506,38 @@ export default function TenantsPage() {
     `${t.name} ${t.unit}`.toLowerCase().includes(search.toLowerCase())
   );
 
+  async function handleSendReminder(t: Tenant, balance: number) {
+    if (!selected || !t.email) return;
+    setReminderState((s) => ({ ...s, [t.id]: "sending" }));
+    try {
+      const res = await fetch("/api/send-reminder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tenantEmail: t.email,
+          tenantName: t.name,
+          unit: t.unit,
+          propertyName: selected.name,
+          balance,
+          senderEmail: profile?.email ?? null,
+        }),
+      });
+      if (!res.ok) throw new Error();
+      setReminderState((s) => ({ ...s, [t.id]: "sent" }));
+      // Let the "Sent" confirmation show for a moment, then return to normal
+      // so the button is reusable if another reminder is needed later.
+      setTimeout(() => {
+        setReminderState((s) => {
+          const next = { ...s };
+          delete next[t.id];
+          return next;
+        });
+      }, 4000);
+    } catch {
+      setReminderState((s) => ({ ...s, [t.id]: "error" }));
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="rounded-3xl border border-line bg-bg p-6 shadow-sm sm:p-8">
@@ -551,6 +586,7 @@ export default function TenantsPage() {
             <>
               {filtered.map((t) => {
                 const { balance, label, className } = paymentInfo(t);
+                const rState = reminderState[t.id];
                 return (
                   <div
                     key={t.id}
@@ -613,18 +649,33 @@ export default function TenantsPage() {
                       </div>
                     </div>
 
-                    {/* Deep-links into the /collect route, which reads the
-                        `tenant` query param and opens the payment-collection
-                        modal pre-scoped to this tenant. */}
-                    <div className="flex justify-end">
+                    {/* Sends a real email via Resend (app/api/send-reminder),
+                        not a deep-link to another page. */}
+                    <div className="flex items-center justify-end gap-2">
+                      {rState === "error" && (
+                        <span className="text-[11px] text-red-600">Couldn't send — try again</span>
+                      )}
                       <button
                         type="button"
-                        onClick={() => router.push(`/collect`)}
-                        disabled={balance <= 0}
-                        title={balance <= 0 ? "Rent is fully paid for this month" : "Send a rent reminder"}
-                        className="rounded-lg border border-line px-2.5 py-1 text-[11px] font-semibold text-accent-ink transition hover:bg-accent-soft disabled:cursor-not-allowed disabled:border-good/30 disabled:bg-good-soft disabled:text-good disabled:hover:bg-good-soft"
+                        onClick={() => handleSendReminder(t, balance)}
+                        disabled={balance <= 0 || !t.email || rState === "sending"}
+                        title={
+                          balance <= 0
+                            ? "Rent is fully paid for this month"
+                            : !t.email
+                            ? "This tenant has no email on record"
+                            : "Email a rent reminder"
+                        }
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1 text-[11px] font-semibold text-accent-ink transition hover:bg-accent-soft disabled:cursor-not-allowed disabled:border-good/30 disabled:bg-good-soft disabled:text-good disabled:hover:bg-good-soft"
                       >
-                        {balance <= 0 ? "Rent paid" : "Send reminder"}
+                        {rState === "sending" && <Loader2 className="h-3 w-3 animate-spin" />}
+                        {rState === "sending"
+                          ? "Sending…"
+                          : rState === "sent"
+                          ? "Reminder sent ✓"
+                          : balance <= 0
+                          ? "Rent paid"
+                          : "Send reminder"}
                       </button>
                     </div>
                   </div>

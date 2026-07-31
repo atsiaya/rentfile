@@ -9,11 +9,19 @@
     "lint": "next lint"
   },
   "dependencies": {
+<<<<<<< HEAD
     "next": "^16.1.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+=======
+    "next": "14.2.35",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+>>>>>>> 026a32281c398a72a38f9b70c190098fa35cce0f
     "firebase": "^10.12.4",
-    "lucide-react": "^0.416.0"
+    "lucide-react": "^0.416.0",
+    "jspdf": "^2.5.2",
+    "jspdf-autotable": "^3.8.4"
   },
   "devDependencies": {
     "typescript": "^5.5.4",
