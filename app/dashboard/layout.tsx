@@ -261,7 +261,7 @@ function DashboardChrome({ children }: { children: React.ReactNode }) {
                   className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3.5 py-2 text-sm font-semibold text-white transition hover:brightness-105 sm:px-4"
                 >
                   <Plus className="h-4 w-4" />
-                  <span className="hidden sm:inline">Add Property</span>
+                  <span className="hidden sm:inline">Collect Rent</span>
                 </Link>
               )}
               {ProfileMenu}
