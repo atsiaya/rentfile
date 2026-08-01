@@ -84,51 +84,109 @@ export async function POST(req: Request) {
       );
     }
 
-    const response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: fromAddress,
-        to: [tenantEmail],
-        subject: `Rent Reminder — Unit ${unit} (${propertyName})`,
-        html: `
-          <div style="font-family:Arial,sans-serif;line-height:1.6;font-size:16px">
-            <h2>Rent Reminder</h2>
+    const today = new Date();
+const asOfDate = today.toLocaleDateString("en-KE", {
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+});
 
-            <p>Hello ${escapeHtml(tenantName || "Tenant")},</p>
+const response = await fetch("https://api.resend.com/emails", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    from: fromAddress,
+    to: [tenantEmail],
+    subject: `Rent Reminder — Unit ${unit} (${propertyName})`,
+    html: `
+      <div style="margin:0;padding:24px 12px;background-color:#f4f4f5;font-family:Arial,Helvetica,sans-serif;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;margin:0 auto;background-color:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
 
-            <p>
-              This is a friendly reminder that your outstanding rent balance is:
-            </p>
+          <!-- Header -->
+          <tr>
+            <td style="background-color:#111827;padding:20px 28px;">
+              <p style="margin:0;color:#ffffff;font-size:15px;font-weight:600;letter-spacing:0.2px;">
+                ${escapeHtml(propertyName)}
+              </p>
+            </td>
+          </tr>
 
-            <h3 style="color:#b7791f">
-              KES ${amount.toLocaleString()}
-            </h3>
+          <!-- Body -->
+          <tr>
+            <td style="padding:32px 28px 8px 28px;">
+              <h1 style="margin:0 0 16px 0;font-size:20px;font-weight:700;color:#111827;">
+                Rent Payment Reminder
+              </h1>
 
-            <table cellpadding="6">
-              <tr>
-                <td><strong>Property</strong></td>
-                <td>${escapeHtml(propertyName)}</td>
-              </tr>
-              <tr>
-                <td><strong>Unit</strong></td>
-                <td>${escapeHtml(unit || "-")}</td>
-              </tr>
-            </table>
+              <p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:#374151;">
+                Hello ${escapeHtml(tenantName || "Tenant")},
+              </p>
 
-            <p>
-              If you have already made payment, kindly disregard this email.
-            </p>
+              <p style="margin:0 0 24px 0;font-size:15px;line-height:1.6;color:#374151;">
+                This is a reminder that the following balance is currently outstanding
+                on your account as of <strong>${asOfDate}</strong>.
+              </p>
 
-            <p>Thank you.</p>
-          </div>
-        `,
-        ...(senderEmail ? { reply_to: senderEmail } : {}),
-      }),
-    });
+              <!-- Amount callout -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#fffbeb;border:1px solid #fde68a;border-radius:10px;margin-bottom:24px;">
+                <tr>
+                  <td style="padding:18px 20px;">
+                    <p style="margin:0 0 4px 0;font-size:12px;font-weight:600;color:#92400e;text-transform:uppercase;letter-spacing:0.4px;">
+                      Balance Due as of ${asOfDate}
+                    </p>
+                    <p style="margin:0;font-size:26px;font-weight:700;color:#b45309;">
+                      KES ${amount.toLocaleString()}
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Details -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:24px;">
+                <tr>
+                  <td style="padding:10px 0;border-bottom:1px solid #f3f4f6;font-size:14px;color:#6b7280;">Property</td>
+                  <td style="padding:10px 0;border-bottom:1px solid #f3f4f6;font-size:14px;color:#111827;font-weight:600;text-align:right;">${escapeHtml(propertyName)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 0;border-bottom:1px solid #f3f4f6;font-size:14px;color:#6b7280;">Unit</td>
+                  <td style="padding:10px 0;border-bottom:1px solid #f3f4f6;font-size:14px;color:#111827;font-weight:600;text-align:right;">${escapeHtml(unit || "-")}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 0;font-size:14px;color:#6b7280;">Statement Date</td>
+                  <td style="padding:10px 0;font-size:14px;color:#111827;font-weight:600;text-align:right;">${asOfDate}</td>
+                </tr>
+              </table>
+
+              <p style="margin:0 0 4px 0;font-size:14px;line-height:1.6;color:#6b7280;">
+                If you have already made this payment, please disregard this notice.
+                For any questions regarding your balance, kindly reach out to your property manager.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:20px 28px 28px 28px;">
+              <p style="margin:0;font-size:13px;color:#9ca3af;">
+                Thank you,<br />${escapeHtml(propertyName)} Management
+              </p>
+            </td>
+          </tr>
+
+        </table>
+
+        <p style="max-width:520px;margin:16px auto 0 auto;font-size:11px;color:#9ca3af;text-align:center;">
+          This is an automated reminder. Please do not reply directly to this email.
+        </p>
+      </div>
+    `,
+    ...(senderEmail ? { reply_to: senderEmail } : {}),
+  }),
+});
+
 
     const result = await response.json();
 
