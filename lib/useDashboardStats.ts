@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { outstandingRentBalance } from "@/lib/rentBalance";
 
 export type DashboardStats = {
   occupiedUnits: number;
@@ -47,8 +48,9 @@ export function useDashboardStats(propertyId: string | null, totalUnits: number)
 
     setStats((s) => ({ ...s, loading: true, totalUnits }));
 
-    let monthlyRentDue = 0;
+    let tenants: { id: string; rent: number; createdAtMillis: number }[] = [];
     let collectedThisMonth = 0;
+    let lifetimePaymentsByTenant: Record<string, number> = {};
 
     // Keep the calculation in step with Collect Rent: both listen to all
     // payments for the selected property and apply the month filter locally.
@@ -58,17 +60,26 @@ export function useDashboardStats(propertyId: string | null, totalUnits: number)
       setStats((s) => ({
         ...s,
         collectedThisMonth,
-        outstanding: Math.max(monthlyRentDue - collectedThisMonth, 0),
+        outstanding: tenants.reduce(
+          (total, tenant) =>
+            total + outstandingRentBalance(
+              tenant.rent,
+              tenant.createdAtMillis,
+              lifetimePaymentsByTenant[tenant.id] ?? 0
+            ).outstanding,
+          0
+        ),
       }));
     }
 
     const unsubTenants = onSnapshot(
       query(collection(db, "tenants"), where("propertyId", "==", propertyId)),
       (snap) => {
-        monthlyRentDue = snap.docs.reduce(
-          (total, doc) => total + (Number(doc.data().rent) || 0),
-          0
-        );
+        tenants = snap.docs.map((doc) => ({
+          id: doc.id,
+          rent: Number(doc.data().rent) || 0,
+          createdAtMillis: doc.data().createdAt?.toMillis?.() ?? 0,
+        }));
         setStats((s) => ({ ...s, occupiedUnits: snap.size, loading: false }));
         updateRentStats();
       },
@@ -78,9 +89,15 @@ export function useDashboardStats(propertyId: string | null, totalUnits: number)
     const unsubPayments = onSnapshot(
       query(collection(db, "payments"), where("propertyId", "==", propertyId)),
       (snap) => {
-        collectedThisMonth = snap.docs
-          .filter((doc) => doc.data().monthKey === currentMonthKey())
-          .reduce((total, doc) => total + (Number(doc.data().amount) || 0), 0);
+        lifetimePaymentsByTenant = {};
+        collectedThisMonth = 0;
+        snap.docs.forEach((doc) => {
+          const payment = doc.data();
+          const amount = Number(payment.amount) || 0;
+          lifetimePaymentsByTenant[payment.tenantId] =
+            (lifetimePaymentsByTenant[payment.tenantId] ?? 0) + amount;
+          if (payment.monthKey === currentMonthKey()) collectedThisMonth += amount;
+        });
         updateRentStats();
       },
       () => {}

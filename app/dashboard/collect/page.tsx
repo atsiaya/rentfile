@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { useProperty } from "@/lib/propertyContext";
+import { outstandingRentBalance } from "@/lib/rentBalance";
 
 type Tenant = {
   id: string;
@@ -33,6 +34,7 @@ type Tenant = {
   unit: string;
   rent: number;
   phone: string;
+  createdAtMillis: number;
 };
 
 type Payment = {
@@ -457,6 +459,7 @@ export default function CollectRentPage() {
             unit: d.data().unit ?? "",
             rent: Number(d.data().rent) || 0,
             phone: d.data().phone ?? "",
+            createdAtMillis: d.data().createdAt?.toMillis?.() ?? 0,
           }))
           .sort((a, b) => a.unit.localeCompare(b.unit));
         setTenants(rows);
@@ -506,7 +509,6 @@ export default function CollectRentPage() {
   }
 
   const paidByTenant = payments
-    .filter((p) => p.monthKey === monthKey)
     .reduce<Record<string, number>>((acc, p) => {
       acc[p.tenantId] = (acc[p.tenantId] ?? 0) + p.amount;
       return acc;
@@ -549,13 +551,14 @@ export default function CollectRentPage() {
           ) : (
             tenants.map((t) => {
               const paid = paidByTenant[t.id] ?? 0;
-              const balance = Math.max(t.rent - paid, 0);
-              const label = balance <= 0 ? "Paid" : paid > 0 ? "Partial" : "Overdue";
+              const currentMonthPaid = payments
+                .filter((payment) => payment.tenantId === t.id && payment.monthKey === monthKey)
+                .reduce((sum, payment) => sum + payment.amount, 0);
+              const balance = outstandingRentBalance(t.rent, t.createdAtMillis, paid).outstanding;
+              const label = balance <= 0 ? "Paid" : "Overdue";
               const badgeClass =
                 label === "Paid"
                   ? "bg-good-soft text-good"
-                  : label === "Partial"
-                  ? "bg-yellow-100 text-yellow-700"
                   : "bg-red-50 text-red-700";
 
               return (
@@ -579,7 +582,7 @@ export default function CollectRentPage() {
                   <div className="flex items-center gap-2 self-start sm:self-auto">
                     <div className="rounded-xl bg-bg px-3 py-1.5 text-right">
                       <p className="text-[10px] uppercase tracking-wide text-muted">Paid</p>
-                      <p className="font-mono text-sm font-semibold text-good">{paid.toLocaleString()}</p>
+                      <p className="font-mono text-sm font-semibold text-good">{currentMonthPaid.toLocaleString()}</p>
                     </div>
                     <div className="rounded-xl bg-bg px-3 py-1.5 text-right">
                       <p className="text-[10px] uppercase tracking-wide text-muted">

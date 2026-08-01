@@ -27,6 +27,7 @@ import {
 import { db } from "@/lib/firebase";
 import { useProperty } from "@/lib/propertyContext";
 import { useUserRecord } from "@/lib/useUserRecord";
+import { outstandingRentBalance } from "@/lib/rentBalance";
 
 type Tenant = {
   id: string;
@@ -62,15 +63,12 @@ function currentMonthKey() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function paymentInfo(t: Tenant) {
-  const balance = Math.max(t.rent - t.amountPaid, 0);
-  const label =
-    balance <= 0 ? "Paid" : t.amountPaid > 0 ? "Partial" : "Unpaid";
+function paymentInfo(t: Tenant, lifetimePaid: number) {
+  const balance = outstandingRentBalance(t.rent, t.createdAt, lifetimePaid).outstanding;
+  const label = balance <= 0 ? "Paid" : "Overdue";
   const className =
     label === "Paid"
       ? "bg-good-soft text-good"
-      : label === "Partial"
-      ? "bg-yellow-100 text-yellow-700"
       : "bg-red-50 text-red-700";
   return { balance, label, className };
 }
@@ -491,7 +489,6 @@ export default function TenantsPage() {
   if (!selected) return <NoPropertySelected />;
 
   const paidByTenant = payments
-    .filter((payment) => payment.monthKey === currentMonthKey())
     .reduce<Record<string, number>>((totals, payment) => {
       totals[payment.tenantId] = (totals[payment.tenantId] ?? 0) + payment.amount;
       return totals;
@@ -499,7 +496,10 @@ export default function TenantsPage() {
 
   const synchronizedTenants = tenants.map((tenant) => ({
     ...tenant,
-    amountPaid: paidByTenant[tenant.id] ?? 0,
+    amountPaid: payments
+      .filter((payment) => payment.tenantId === tenant.id && payment.monthKey === currentMonthKey())
+      .reduce((sum, payment) => sum + payment.amount, 0),
+    lifetimePaid: paidByTenant[tenant.id] ?? 0,
   }));
 
   const filtered = synchronizedTenants.filter((t) =>
@@ -585,7 +585,7 @@ export default function TenantsPage() {
           ) : (
             <>
               {filtered.map((t) => {
-                const { balance, label, className } = paymentInfo(t);
+                const { balance, label, className } = paymentInfo(t, t.lifetimePaid);
                 const rState = reminderState[t.id];
                 return (
                   <div
