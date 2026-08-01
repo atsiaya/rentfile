@@ -1,10 +1,5 @@
 import { NextResponse } from "next/server";
-import {
-  collection,
-  getDocs,
-  query,
-  where,
-} from "firebase/firestore";
+import { adminDb } from "@/lib/firebaseAdmin";
 import { db } from "@/lib/firebase";
 
 export const dynamic = "force-dynamic"; // never cache a cron endpoint
