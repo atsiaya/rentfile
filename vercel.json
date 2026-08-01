@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/rent-reminders",
-      "schedule": "30 16 * * *"
+      "schedule": "30 16 10 * *"
     },
     {
       "path": "/api/cron/monthly-statements",
