@@ -3,6 +3,11 @@
     {
       "path": "/api/cron/rent-reminders",
       "schedule": "30 16 * * *"
+    },
+    {
+      "path": "/api/cron/monthly-statements",
+
+      "schedule": "0 8 1 * *"
     }
   ]
 }
