@@ -60,7 +60,7 @@ export async function GET(request: Request) {
   }
 
   const apiKey = process.env.RESEND_API_KEY;
-  const configuredFrom = process.env.RESEND_FROM_EMAIL;
+  const configuredFrom = process.env.RESEND_FROM_REMINDERS;
   if (!apiKey || !configuredFrom) {
     return NextResponse.json({ error: "Missing RESEND_API_KEY or RESEND_FROM_EMAIL." }, { status: 500 });
   }
