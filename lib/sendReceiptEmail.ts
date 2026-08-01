@@ -12,7 +12,7 @@ export async function sendReceiptEmail(
   const filename = `Receipt-${receipt.receiptNo}.pdf`;
 
   return await resend.emails.send({
-    from: process.env.RESEND_FROM_EMAIL || "RentFile <noreply@example.com>",
+    from: process.env.RESEND_FROM_RECEIPTS || "RentFile <noreply@example.com>",
     to: recipientEmail,
     subject: `Payment Receipt - ${receipt.propertyName}`,
     html: `
