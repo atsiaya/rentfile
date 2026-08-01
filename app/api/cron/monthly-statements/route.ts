@@ -110,10 +110,10 @@ export async function GET(req: Request) {
   }
 
   const apiKey = process.env.RESEND_API_KEY;
-  const fromAddress = process.env.RESEND_FROM_EMAIL;
+  const fromAddress = process.env.RESEND_FROM_STATEMENTS;
   if (!apiKey || !fromAddress) {
     return NextResponse.json(
-      { error: "Missing RESEND_API_KEY or RESEND_FROM_EMAIL." },
+      { error: "Missing RESEND_API_KEY or RESEND_FROM_STATEMENTS." },
       { status: 500 }
     );
   }
