@@ -51,7 +51,7 @@ export async function POST(req: Request) {
     }
 
     const apiKey = process.env.RESEND_API_KEY;
-    const configuredFromAddress = process.env.RESEND_FROM_EMAIL;
+    const configuredFromAddress = process.env.RESEND_FROM_REMINDERS;
 
     if (!apiKey) {
       return NextResponse.json(
