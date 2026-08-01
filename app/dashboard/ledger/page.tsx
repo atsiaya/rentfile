@@ -3,17 +3,25 @@
 import { useEffect, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import {
+  AlertTriangle,
   Building2,
   Calendar,
   Download,
   FileText,
   Loader2,
+  User,
   X,
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { useProperty } from "@/lib/propertyContext";
 
-type Tenant = { id: string; name: string; unit: string; rent: number };
+type Tenant = {
+  id: string;
+  name: string;
+  unit: string;
+  rent: number;
+  createdAtMillis: number;
+};
 
 type Payment = {
   id: string;
@@ -34,6 +42,12 @@ function currentMonthKey() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function monthKeyFromMillis(millis: number) {
+  if (!millis) return currentMonthKey();
+  const d = new Date(millis);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 function monthKeyNMonthsAgo(n: number) {
   const d = new Date();
   d.setMonth(d.getMonth() - n);
@@ -50,35 +64,53 @@ function monthLabel(key: string) {
   return new Date(y, m - 1, 1).toLocaleDateString("en-KE", { month: "long", year: "numeric" });
 }
 
-/**
- * Status here — same math as the Tenants and Collect Rent pages: sum the
- * `payments` collection for the current month, don't read a stored counter
- * off the tenant doc. Collect Rent doesn't write one, so relying on it here
- * would silently drift out of sync with what those two pages show.
- */
-function statusFor(rent: number, paidThisMonth: number) {
-  const balance = Math.max(rent - paidThisMonth, 0);
-  const status: "Paid" | "Partial" | "Due" =
-    balance <= 0 && rent > 0 ? "Paid" : paidThisMonth > 0 ? "Partial" : "Due";
-  return { balance, status };
+/** How many calendar months a tenant has owed rent for, counting the month
+ * they moved in through the current month, inclusive. A tenant who started
+ * in May and it's now July owes 3 months of rent (May, June, July) even if
+ * they've only ever made one payment. */
+function monthsElapsedInclusive(startMillis: number): number {
+  if (!startMillis) return 1;
+  const start = new Date(startMillis);
+  const now = new Date();
+  const months = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth()) + 1;
+  return Math.max(months, 1);
 }
 
-/** Report modal — pick a period, download a PDF statement of every payment in it. */
+/**
+ * Arrears, not just this month's shortfall. Total owed is rent × every
+ * month the tenant has been on the ledger; total paid is EVERY payment
+ * they've ever made, not just this month's. The difference is what's
+ * actually outstanding — a missed month from three months ago still shows
+ * up here even though "this month" on its own would look fully paid.
+ */
+function arrearsFor(tenant: Tenant, lifetimePaid: number) {
+  const totalOwed = tenant.rent * monthsElapsedInclusive(tenant.createdAtMillis);
+  const arrears = Math.max(totalOwed - lifetimePaid, 0);
+  return { totalOwed, arrears };
+}
+
+/** Report modal — pick a period (or a tenant's full lifetime), download a
+ * PDF statement of every payment in it. */
 function ReportModal({
   propertyName,
+  tenants,
   payments,
   onClose,
 }: {
   propertyName: string;
+  tenants: Tenant[];
   payments: Payment[];
   onClose: () => void;
 }) {
+  const [tenantId, setTenantId] = useState(""); // "" = all tenants combined
   const [startMonth, setStartMonth] = useState(currentMonthKey());
   const [endMonth, setEndMonth] = useState(currentMonthKey());
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function applyPreset(preset: "this" | "last3" | "ytd") {
+  const selectedTenant = tenants.find((t) => t.id === tenantId) ?? null;
+
+  function applyPreset(preset: "this" | "last3" | "ytd" | "lifetime") {
     const now = currentMonthKey();
     if (preset === "this") {
       setStartMonth(now);
@@ -86,13 +118,23 @@ function ReportModal({
     } else if (preset === "last3") {
       setStartMonth(monthKeyNMonthsAgo(2));
       setEndMonth(now);
-    } else {
+    } else if (preset === "ytd") {
       setStartMonth(firstMonthKeyOfYear());
+      setEndMonth(now);
+    } else {
+      // Lifetime: from whichever is earlier — the tenant's move-in month
+      // (if one is selected) or the earliest payment on record — through now.
+      const earliestPaymentKey = payments.map((p) => p.monthKey).filter(Boolean).sort()[0];
+      const startKey = selectedTenant
+        ? monthKeyFromMillis(selectedTenant.createdAtMillis)
+        : earliestPaymentKey ?? now;
+      setStartMonth(startKey);
       setEndMonth(now);
     }
   }
 
-  const inRange = payments
+  const scopedPayments = payments.filter((p) => (tenantId ? p.tenantId === tenantId : true));
+  const inRange = scopedPayments
     .filter((p) => p.monthKey >= startMonth && p.monthKey <= endMonth)
     .sort((a, b) => a.createdAtMillis - b.createdAtMillis);
   const total = inRange.reduce((sum, p) => sum + p.amount, 0);
@@ -118,7 +160,11 @@ function ReportModal({
       doc.text("RentFile — Payment Statement", 14, 18);
       doc.setFontSize(11);
       doc.setTextColor(90);
-      doc.text(propertyName, 14, 26);
+      doc.text(
+        selectedTenant ? `${selectedTenant.name} — Unit ${selectedTenant.unit}, ${propertyName}` : propertyName,
+        14,
+        26
+      );
       doc.text(periodLabel, 14, 32);
       doc.text(`Generated ${new Date().toLocaleDateString("en-KE", { day: "numeric", month: "long", year: "numeric" })}`, 14, 38);
 
@@ -138,7 +184,8 @@ function ReportModal({
         footStyles: { fillColor: [246, 247, 249], textColor: 20, fontStyle: "bold" },
       });
 
-      const filename = `${propertyName.replace(/\s+/g, "-")}-statement-${startMonth}${
+      const namePart = selectedTenant ? `-${selectedTenant.name.replace(/\s+/g, "-")}` : "";
+      const filename = `${propertyName.replace(/\s+/g, "-")}${namePart}-statement-${startMonth}${
         startMonth !== endMonth ? `_to_${endMonth}` : ""
       }.pdf`;
       doc.save(filename);
@@ -153,7 +200,7 @@ function ReportModal({
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
       <button aria-label="Close" onClick={onClose} className="absolute inset-0 bg-black/30" />
-      <div className="relative w-full max-w-lg rounded-t-3xl border border-line bg-bg p-6 shadow-xl sm:rounded-3xl sm:p-8">
+      <div className="relative max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-3xl border border-line bg-bg p-6 shadow-xl sm:rounded-3xl sm:p-8">
         <div className="flex items-center justify-between">
           <div>
             <span className="inline-flex items-center gap-2 rounded-full bg-accent-soft px-3.5 py-1.5 text-xs font-semibold text-accent-ink">
@@ -174,10 +221,32 @@ function ReportModal({
           </button>
         </div>
 
-        <div className="mt-6 flex flex-wrap gap-2">
+        <div className="mt-6">
+          <label className="mb-2 block text-sm font-semibold text-fg">Tenant</label>
+          <div className="relative flex items-center">
+            <User className="pointer-events-none absolute left-4 h-[18px] w-[18px] text-muted" strokeWidth={1.75} />
+            <select
+              value={tenantId}
+              onChange={(e) => setTenantId(e.target.value)}
+              className="w-full rounded-2xl border border-line bg-bg-alt py-3.5 pl-12 pr-4 text-sm text-fg outline-none transition focus:border-accent focus:ring-4 focus:ring-accent-soft"
+            >
+              <option value="">All tenants (combined)</option>
+              {tenants.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.unit} — {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-wrap gap-2">
           <button type="button" onClick={() => applyPreset("this")} className={presetClass}>This month</button>
           <button type="button" onClick={() => applyPreset("last3")} className={presetClass}>Last 3 months</button>
           <button type="button" onClick={() => applyPreset("ytd")} className={presetClass}>Year to date</button>
+          <button type="button" onClick={() => applyPreset("lifetime")} className={presetClass}>
+            {selectedTenant ? "Lifetime (since move-in)" : "Lifetime (all records)"}
+          </button>
         </div>
 
         <div className="mt-5 grid grid-cols-2 gap-3">
@@ -224,7 +293,7 @@ function ReportModal({
           {generating ? "Generating…" : "Download PDF"}
         </button>
         {inRange.length === 0 && (
-          <p className="mt-2 text-center text-xs text-muted">No payments recorded in this period.</p>
+          <p className="mt-2 text-center text-xs text-muted">No payments recorded in this range.</p>
         )}
       </div>
     </div>
@@ -252,19 +321,23 @@ export default function LedgerPage() {
       query(collection(db, "tenants"), where("propertyId", "==", selected.id)),
       (snap) =>
         setTenants(
-          snap.docs.map((d) => ({
-            id: d.id,
-            name: d.data().name ?? "",
-            unit: d.data().unit ?? "",
-            rent: Number(d.data().rent) || 0,
-          }))
+          snap.docs.map((d) => {
+            const data = d.data();
+            return {
+              id: d.id,
+              name: data.name ?? "",
+              unit: data.unit ?? "",
+              rent: Number(data.rent) || 0,
+              createdAtMillis: data.createdAt?.toMillis?.() ?? 0,
+            };
+          })
         )
     );
 
-    // Full payment history for this property — no monthKey filter here,
-    // since the report generator needs every month, not just the current
-    // one. No orderBy either, for the same composite-index reason as the
-    // Tenants/Collect pages; sorted client-side instead.
+    // Full payment history for this property — needed for lifetime arrears
+    // AND the report generator, not just the current month. No orderBy, for
+    // the same composite-index reason as the Tenants/Collect pages; sorted
+    // client-side instead.
     const unsubP = onSnapshot(
       query(collection(db, "payments"), where("propertyId", "==", selected.id)),
       (snap) =>
@@ -307,6 +380,11 @@ export default function LedgerPage() {
   }
 
   const thisMonth = currentMonthKey();
+
+  const paidByTenantLifetime = payments.reduce<Record<string, number>>((acc, p) => {
+    acc[p.tenantId] = (acc[p.tenantId] ?? 0) + p.amount;
+    return acc;
+  }, {});
   const paidByTenantThisMonth = payments
     .filter((p) => p.monthKey === thisMonth)
     .reduce<Record<string, number>>((acc, p) => {
@@ -315,15 +393,23 @@ export default function LedgerPage() {
     }, {});
 
   const rows = tenants.map((t) => {
+    const lifetimePaid = paidByTenantLifetime[t.id] ?? 0;
     const paidThisMonth = paidByTenantThisMonth[t.id] ?? 0;
-    const { balance, status } = statusFor(t.rent, paidThisMonth);
-    return { ...t, paidThisMonth, balance, status };
+    const { totalOwed, arrears } = arrearsFor(t, lifetimePaid);
+    const status: "Paid" | "Partial" | "Due" =
+      arrears <= 0 ? "Paid" : paidThisMonth > 0 ? "Partial" : "Due";
+    return { ...t, paidThisMonth, lifetimePaid, totalOwed, arrears, status };
   });
 
   const filtered = rows.filter(
     (r) => tab === "All" || (tab === "Paid" ? r.status === "Paid" : r.status !== "Paid")
   );
-  const outstanding = rows.reduce((sum, r) => sum + r.balance, 0);
+
+  // Every tenant's arrears, summed — this is the fix. A tenant who missed
+  // last month and paid nothing yet this month still counts, even though
+  // "this month" in isolation would show them as merely "Due" for one
+  // month's rent rather than however many months have actually piled up.
+  const outstanding = rows.reduce((sum, r) => sum + r.arrears, 0);
 
   const recentPayments = payments
     .filter((p) => p.monthKey === thisMonth)
@@ -335,7 +421,7 @@ export default function LedgerPage() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="font-display text-2xl font-bold tracking-tight text-fg">Ledger</h1>
-            <p className="mt-1 text-sm text-muted">{selected.name} — this month.</p>
+            <p className="mt-1 text-sm text-muted">{selected.name}.</p>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -346,7 +432,7 @@ export default function LedgerPage() {
               Generate report
             </button>
             <div className="rounded-2xl bg-accent-soft px-4 py-2.5 text-right">
-              <p className="text-xs text-accent-ink">Outstanding</p>
+              <p className="text-xs text-accent-ink">Outstanding (all arrears)</p>
               <p className="font-mono text-sm font-semibold text-accent-ink">
                 KES {outstanding.toLocaleString()}
               </p>
@@ -371,32 +457,46 @@ export default function LedgerPage() {
         </div>
 
         <div className="mt-5 divide-y divide-line overflow-hidden rounded-2xl border border-line">
-          {filtered.map((r) => (
-            <div key={r.id} className="flex items-center justify-between bg-bg-alt px-4 py-3.5">
-              <div className="flex items-center gap-3">
-                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-bg font-mono text-xs text-muted">
-                  {r.unit}
-                </span>
-                <div>
-                  <p className="text-sm font-medium text-fg">{r.name}</p>
-                  <p className="text-xs text-muted">
-                    KES {r.paidThisMonth.toLocaleString()} of {r.rent.toLocaleString()} this month
-                  </p>
+          {filtered.map((r) => {
+            const monthsBehind = r.rent > 0 ? Math.ceil(r.arrears / r.rent) : 0;
+            return (
+              <div key={r.id} className="bg-bg-alt px-4 py-3.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-bg font-mono text-xs text-muted">
+                      {r.unit}
+                    </span>
+                    <div>
+                      <p className="text-sm font-medium text-fg">{r.name}</p>
+                      <p className="text-xs text-muted">
+                        KES {r.paidThisMonth.toLocaleString()} of {r.rent.toLocaleString()} this month
+                      </p>
+                    </div>
+                  </div>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                      r.status === "Paid"
+                        ? "bg-good-soft text-good"
+                        : r.status === "Partial"
+                        ? "bg-yellow-100 text-yellow-700"
+                        : "bg-accent-soft text-accent-ink"
+                    }`}
+                  >
+                    {r.status}
+                  </span>
                 </div>
+                {r.arrears > 0 && (
+                  <div className="mt-2 flex items-center gap-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                    <span>
+                      Total arrears: <span className="font-mono font-semibold">KES {r.arrears.toLocaleString()}</span>
+                      {monthsBehind >= 1 && ` — roughly ${monthsBehind} month${monthsBehind === 1 ? "" : "s"} of unpaid rent`}
+                    </span>
+                  </div>
+                )}
               </div>
-              <span
-                className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                  r.status === "Paid"
-                    ? "bg-good-soft text-good"
-                    : r.status === "Partial"
-                    ? "bg-yellow-100 text-yellow-700"
-                    : "bg-accent-soft text-accent-ink"
-                }`}
-              >
-                {r.status}
-              </span>
-            </div>
-          ))}
+            );
+          })}
           {filtered.length === 0 && (
             <p className="bg-bg-alt p-6 text-center text-sm text-muted">Nothing here yet.</p>
           )}
@@ -405,7 +505,7 @@ export default function LedgerPage() {
         {recentPayments.length > 0 && (
           <div className="mt-6">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">
-              Recent payments
+              Recent payments (this month)
             </p>
             <div className="space-y-2">
               {recentPayments.map((p) => (
@@ -427,7 +527,12 @@ export default function LedgerPage() {
       </div>
 
       {reportOpen && (
-        <ReportModal propertyName={selected.name} payments={payments} onClose={() => setReportOpen(false)} />
+        <ReportModal
+          propertyName={selected.name}
+          tenants={tenants}
+          payments={payments}
+          onClose={() => setReportOpen(false)}
+        />
       )}
     </div>
   );
