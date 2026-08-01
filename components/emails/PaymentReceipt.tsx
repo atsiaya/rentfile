@@ -33,7 +33,7 @@ export default function PaymentReceipt(props: PaymentReceiptProps) {
               <p><b>Method:</b> {props.method}</p>
               <p><b>Amount Paid:</b> {money(props.amount)}</p>
               <p><b>Total Paid This Month:</b> {money(props.monthlyTotal)}</p>
-              <p><b>Outstanding Balance:</b> {money(props.balance)}</p>
+              <p><b>Outstanding Balance:!</b> {money(props.balance)}</p>
               <hr/>
               <p>Thank you for your payment.</p>
               <p>Please find your official PDF receipt attached.</p>
