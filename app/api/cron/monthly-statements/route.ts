@@ -123,7 +123,7 @@ export async function GET(req: Request) {
   const results: { tenant: string; property: string; status: "sent" | "skipped" | "failed"; detail?: string }[] = [];
 
   try {
-    const propsSnap = await getDocs(collection(db, "properties"));
+    const propsSnap = await adminDb.collection("properties").get();
     const properties: Property[] = propsSnap.docs.map((d) => ({
       id: d.id,
       name: d.data().name ?? "Untitled property",
@@ -131,9 +131,10 @@ export async function GET(req: Request) {
     }));
 
     for (const property of properties) {
-      const tenantsSnap = await getDocs(
-        query(collection(db, "tenants"), where("propertyId", "==", property.id))
-      );
+      const tenantsSnap = await adminDb
+  .collection("tenants")
+  .where("propertyId", "==", property.id)
+  .get();
       const tenants: Tenant[] = tenantsSnap.docs.map((d) => ({
         id: d.id,
         name: d.data().name ?? "",
@@ -142,13 +143,12 @@ export async function GET(req: Request) {
         email: d.data().email ?? "",
       }));
 
-      const paymentsSnap = await getDocs(
-        query(
-          collection(db, "payments"),
-          where("propertyId", "==", property.id),
-          where("monthKey", "==", monthKey)
-        )
-      );
+      const paymentsSnap = await adminDb
+  .collection("payments")
+  .where("propertyId", "==", property.id)
+  .where("monthKey", "==", monthKey)
+  .get();
+      
       const allPayments: (Payment & { tenantId: string })[] = paymentsSnap.docs.map((d) => ({
         tenantId: d.data().tenantId ?? "",
         amount: Number(d.data().amount) || 0,
