@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState } from "react";
 import {
   addDoc,
@@ -34,6 +32,7 @@ type Tenant = {
   unit: string;
   rent: number;
   phone: string;
+  email: string;
   createdAtMillis: number;
 };
 
@@ -54,6 +53,7 @@ type Extracted = {
 };
 
 type MatchMethod = "phone" | "name" | null;
+type ReceiptOutcome = "sent" | "skipped" | "failed";
 
 const methods = ["M-Pesa", "Bank transfer", "Cash"] as const;
 
@@ -181,16 +181,18 @@ function extractFromMessage(text: string): Extracted {
  * /date/time, or just type them in by hand — both feed the same fields. */
 function AddPaymentModal({
   propertyId,
+  propertyName,
   tenant,
   monthKey,
   onClose,
   onSaved,
 }: {
   propertyId: string;
+  propertyName: string;
   tenant: Tenant;
   monthKey: string;
   onClose: () => void;
-  onSaved: (amount: number) => void;
+  onSaved: (amount: number, receipt: ReceiptOutcome) => void;
 }) {
   const [message, setMessage] = useState("");
   const [extracted, setExtracted] = useState<Extracted | null>(null);
@@ -241,13 +243,14 @@ function AddPaymentModal({
       const effectiveMonthKey = Number.isNaN(parsedDate.getTime())
         ? monthKey
         : currentMonthKey(parsedDate);
+      const paidAmount = Number(amount) || 0;
 
-      await addDoc(collection(db, "payments"), {
+      const paymentRef = await addDoc(collection(db, "payments"), {
         propertyId,
         tenantId: tenant.id,
         tenantName: tenant.name,
         unit: tenant.unit,
-        amount: Number(amount) || 0,
+        amount: paidAmount,
         method,
         status: "Paid",
         monthKey: effectiveMonthKey,
@@ -260,7 +263,39 @@ function AddPaymentModal({
         rawMessage: message || null,
         createdAt: serverTimestamp(),
       });
-      onSaved(Number(amount) || 0);
+
+      // Receipt is best-effort: a failed or skipped email should never make
+      // the payment itself look like it didn't save — it's already
+      // committed above by this point regardless of what happens next.
+      // The modal stays open (saving=true) through this so the parent's
+      // success banner can report the real outcome instead of closing
+      // before we know it.
+      let receiptOutcome: ReceiptOutcome = "skipped";
+      if (tenant.email) {
+        try {
+          const res = await fetch("/api/send-payment-receipt", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              tenantId: tenant.id,
+              tenantEmail: tenant.email,
+              tenantName: tenant.name,
+              propertyName,
+              unit: tenant.unit,
+              paymentId: paymentRef.id,
+              amount: paidAmount,
+              method,
+              paymentDate: date || null,
+              monthKey: effectiveMonthKey,
+            }),
+          });
+          receiptOutcome = res.ok ? "sent" : "failed";
+        } catch {
+          receiptOutcome = "failed";
+        }
+      }
+
+      onSaved(paidAmount, receiptOutcome);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't record that payment.");
     } finally {
@@ -419,7 +454,7 @@ function AddPaymentModal({
           className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-sm font-semibold text-white transition hover:brightness-105 disabled:opacity-60"
         >
           {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-          Save payment
+          {saving ? "Saving & emailing receipt…" : "Save payment"}
         </button>
       </form>
     </div>
@@ -459,6 +494,7 @@ export default function CollectRentPage() {
             unit: d.data().unit ?? "",
             rent: Number(d.data().rent) || 0,
             phone: d.data().phone ?? "",
+            email: d.data().email ?? "",
             createdAtMillis: d.data().createdAt?.toMillis?.() ?? 0,
           }))
           .sort((a, b) => a.unit.localeCompare(b.unit));
@@ -612,11 +648,20 @@ export default function CollectRentPage() {
       {activeTenant && (
         <AddPaymentModal
           propertyId={selected.id}
+          propertyName={selected.name}
           tenant={activeTenant}
           monthKey={monthKey}
           onClose={() => setActiveTenant(null)}
-          onSaved={(amount) => {
-            setJustRecorded(`${activeTenant.unit} — ${activeTenant.name} — KES ${amount.toLocaleString()} recorded.`);
+          onSaved={(amount, receipt) => {
+            const receiptNote =
+              receipt === "sent"
+                ? "Receipt emailed."
+                : receipt === "failed"
+                ? "Receipt failed to send — resend from Tenants."
+                : "No email on file, so no receipt was sent.";
+            setJustRecorded(
+              `${activeTenant.unit} — ${activeTenant.name} — KES ${amount.toLocaleString()} recorded. ${receiptNote}`
+            );
             setActiveTenant(null);
           }}
         />
