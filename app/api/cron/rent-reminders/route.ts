@@ -24,7 +24,7 @@ function getFromAddress(value: string) {
   if (configuredValue.includes("@")) return configuredValue;
   const domain = configuredValue.replace(/^https?:\/\//, "").replace(/\/$/, "");
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i.test(domain)) {
-    throw new Error("RESEND_FROM_EMAIL must be a valid email address or sending domain.");
+    throw new Error("RESEND_FROM_REMINDERS must be a valid email address or sending domain.");
   }
   return `RentFile <statements@${domain}>`;
 }
@@ -50,8 +50,13 @@ async function sendReminder(
 }
 
 /**
- * Runs every five minutes while testing. It only sends one reminder per
- * tenant per month, tracked in Firestore, so the schedule cannot spam tenants.
+ * Runs once a month, on the 10th (see vercel.json — "0 6 10 * *", 06:00 UTC
+ * / 09:00 Nairobi). Sends at most one reminder per tenant per calendar
+ * month, enforced by a lock doc in `automatedReminders/{monthKey}_{tenantId}`
+ * created with .create() (which throws if the doc already exists) — so
+ * re-running this route manually, or Vercel retrying a timeout, can never
+ * double-send. A failed send deletes its own lock doc so the NEXT scheduled
+ * run (next month) or a manual re-trigger can retry it.
  */
 export async function GET(request: Request) {
   const cronSecret = process.env.CRON_SECRET;
@@ -62,7 +67,13 @@ export async function GET(request: Request) {
   const apiKey = process.env.RESEND_API_KEY;
   const configuredFrom = process.env.RESEND_FROM_REMINDERS;
   if (!apiKey || !configuredFrom) {
-    return NextResponse.json({ error: "Missing RESEND_API_KEY or RESEND_FROM_EMAIL." }, { status: 500 });
+    // Fixed: this used to say "RESEND_FROM_EMAIL" here while actually
+    // reading RESEND_FROM_REMINDERS above — the message now names the
+    // variable the code actually checks.
+    return NextResponse.json(
+      { error: "Missing RESEND_API_KEY or RESEND_FROM_REMINDERS." },
+      { status: 500 }
+    );
   }
 
   const monthKey = currentMonthKey();
@@ -73,7 +84,8 @@ export async function GET(request: Request) {
       adminDb.collection("properties").get(),
       adminDb.collection("payments").get(),
     ]);
-    const paidByTenant = paymentsSnapshot.docs.reduce<Record<string, number>>((totals: Record<string, number>, payment: { data: () => Record<string, unknown> }) => {
+
+    const paidByTenant = paymentsSnapshot.docs.reduce<Record<string, number>>((totals, payment) => {
       const data = payment.data();
       const tenantId = typeof data.tenantId === "string" ? data.tenantId : "";
       totals[tenantId] = (totals[tenantId] ?? 0) + (Number(data.amount) || 0);
@@ -82,7 +94,10 @@ export async function GET(request: Request) {
 
     for (const propertyDoc of propertiesSnapshot.docs) {
       const property = propertyDoc.data();
-      const tenantsSnapshot = await adminDb.collection("tenants").where("propertyId", "==", propertyDoc.id).get();
+      const tenantsSnapshot = await adminDb
+        .collection("tenants")
+        .where("propertyId", "==", propertyDoc.id)
+        .get();
 
       for (const tenantDoc of tenantsSnapshot.docs) {
         const data = tenantDoc.data();
@@ -94,15 +109,31 @@ export async function GET(request: Request) {
           email: data.email ?? "",
           createdAtMillis: data.createdAt?.toMillis?.() ?? 0,
         };
-        const balance = outstandingRentBalance(tenant.rent, tenant.createdAtMillis, paidByTenant[tenant.id] ?? 0).outstanding;
+
+        const balance = outstandingRentBalance(
+          tenant.rent,
+          tenant.createdAtMillis,
+          paidByTenant[tenant.id] ?? 0
+        ).outstanding;
+
         if (!tenant.email || balance <= 0) {
-          results.push({ tenant: tenant.name, status: "skipped", detail: !tenant.email ? "no email" : "no outstanding balance" });
+          results.push({
+            tenant: tenant.name,
+            status: "skipped",
+            detail: !tenant.email ? "no email" : "no outstanding balance",
+          });
           continue;
         }
 
         const logRef = adminDb.collection("automatedReminders").doc(`${monthKey}_${tenant.id}`);
         try {
-          await logRef.create({ tenantId: tenant.id, propertyId: propertyDoc.id, monthKey, status: "sending", createdAt: new Date() });
+          await logRef.create({
+            tenantId: tenant.id,
+            propertyId: propertyDoc.id,
+            monthKey,
+            status: "sending",
+            createdAt: new Date(),
+          });
         } catch (error) {
           if ((error as { code?: number }).code === 6) {
             results.push({ tenant: tenant.name, status: "skipped", detail: "already sent this month" });
@@ -116,15 +147,29 @@ export async function GET(request: Request) {
           await logRef.update({ status: "sent", sentAt: new Date(), balance });
           results.push({ tenant: tenant.name, status: "sent" });
         } catch (error) {
-          await logRef.delete(); // allow the next five-minute run to retry a failed delivery
-          results.push({ tenant: tenant.name, status: "failed", detail: error instanceof Error ? error.message : "unknown error" });
+          // Delete the lock so a later manual re-trigger (or, worst case,
+          // next month's scheduled run) can retry a delivery that failed.
+          await logRef.delete();
+          results.push({
+            tenant: tenant.name,
+            status: "failed",
+            detail: error instanceof Error ? error.message : "unknown error",
+          });
         }
       }
     }
 
-    return NextResponse.json({ monthKey, ...results.reduce((counts, result) => ({ ...counts, [result.status]: counts[result.status] + 1 }), { sent: 0, skipped: 0, failed: 0 }), results });
+    const counts = results.reduce(
+      (acc, r) => ({ ...acc, [r.status]: acc[r.status] + 1 }),
+      { sent: 0, skipped: 0, failed: 0 }
+    );
+
+    return NextResponse.json({ monthKey, ...counts, results });
   } catch (error) {
     console.error("rent-reminders cron failed:", error);
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Cron failed." }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Cron failed." },
+      { status: 500 }
+    );
   }
 }
