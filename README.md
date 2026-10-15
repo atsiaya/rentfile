@@ -1,36 +1,61 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+RentFile — Rent and Bills, Filed Properly
 
-## Getting Started
+RentFile is a property management platform designed to simplify rent collection, tenant management, payment tracking, and bill record-keeping for landlords and property managers.
 
-First, run the development server:
+🌐 Website: https://rentfile.co.ke
 
-```bash
+About RentFile
+
+RentFile helps landlords keep their rental operations organized by bringing tenant records, rent payments, outstanding balances, and receipts into one central platform. Instead of relying on scattered spreadsheets, handwritten records, or forwarded payment messages, property managers can maintain clearer and more accessible rental records.
+
+The platform is designed to make everyday property management more transparent, efficient, and manageable.
+
+Key Features
+
+* Tenant Management — Maintain tenant information and rental records in one place.
+* Rent Tracking — Monitor rent payments, outstanding balances, and arrears.
+* Payment Records — Record rent transactions and track payment methods, including M-Pesa, bank transfers, and cash.
+* Digital Receipts — Generate payment receipts to support accurate record-keeping.
+* Bill Management — Keep rental bills and related financial records organized.
+* Tenant Communication — Support email-based receipts, reminders, and rental statements.
+* Rental History — Maintain transaction records to make it easier to review payment activity.
+
+Who Is RentFile For?
+
+RentFile is designed for landlords and property managers who want a more structured way to manage rental properties, monitor payments, maintain tenant records, and reduce administrative work.
+
+Technology
+
+RentFile is built using modern web technologies, including:
+
+* Next.js — Web application framework.
+* React — User interface development.
+* Firebase — Backend services and data management.
+* Tailwind CSS — Interface styling.
+
+Getting Started
+
+To run the project locally, clone the repository and install its dependencies.
+
+git clone <your-repository-url>
+cd rentfile
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000 in your browser.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Configure the required environment variables for Firebase and any enabled email or scheduled-task integrations before using features that depend on those services. Refer to the project’s environment configuration and deployment settings for the required values.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Production
 
-## Learn More
+The production website is available at https://rentfile.co.ke.
 
-To learn more about Next.js, take a look at the following resources:
+Deployment configuration depends on the hosting environment and the project’s production environment variables.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Project Purpose
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+RentFile aims to make rental management simpler by helping landlords organize rent collection, tenant information, bills, and payment documentation in a centralized digital workspace.
 
-## Deploy on Vercel
+⸻
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+RentFile — Rent and bills, filed properly.
